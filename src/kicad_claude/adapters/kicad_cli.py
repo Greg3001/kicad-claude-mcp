@@ -165,6 +165,7 @@ def run_drc(
     severity: str = "all",
     schematic_parity: bool = True,
     all_track_errors: bool = False,
+    refill_zones: bool = False,
     timeout: float = 120.0,
 ) -> dict:
     """Run `kicad-cli pcb drc --format json` and parse the report.
@@ -191,6 +192,9 @@ def run_drc(
         cmd.insert(-1, "--schematic-parity")
     if all_track_errors:
         cmd.insert(-1, "--all-track-errors")
+    if refill_zones:
+        cmd.insert(-1, "--refill-zones")
+        cmd.insert(-1, "--save-board")
 
     try:
         r = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout, check=False)

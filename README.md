@@ -8,8 +8,8 @@ Full implementation spec: [`kicad-claude-mcp-spec.md`](./kicad-claude-mcp-spec.m
 
 ## Status
 
-**Phases 0–10 complete.** 59 MCP tools registered. 113 fast tests +
-23 acceptance tests pass.
+**Phases 0–11 complete.** 65 MCP tools registered. 128 fast tests +
+25 acceptance tests pass.
 
 | Phase | What it adds | Tools |
 |------|--------------|-------|
@@ -24,6 +24,7 @@ Full implementation spec: [`kicad-claude-mcp-spec.md`](./kicad-claude-mcp-spec.m
 | 8 | Hierarchical sheets + 2-32 layer PCBs (extra-spec) | `add_sheet`, `set_active_sheet`, `get_active_sheet`, `list_sheets`, `add_hierarchical_label`, `add_sheet_pin` |
 | 9 | Manufacturing outputs (gerbers, drill, BOM, 3D render, SVG) | `export_gerbers`, `export_drill`, `export_pos`, `export_bom`, `export_netlist`, `render_pcb_3d`, `export_pcb_svg`, `export_fab_package` |
 | 10 | Design rules + net classes + annotation + schematic↔PCB sync | `set_design_rules`, `apply_fab_preset`, `list_fab_presets`, `add_net_class`, `remove_net_class`, `assign_net_class`, `list_net_classes`, `annotate_schematic`, `update_pcb_from_schematic` |
+| 11 | Copper zones, mounting holes, silk, fiducials, sourcing-enriched BOM | `add_zone`, `add_ground_plane`, `add_silk_text`, `add_mounting_hole`, `add_fiducial`, `enrich_bom_with_sourcing` |
 
 Phase-by-phase notes and the technical decisions that diverge from the spec
 live in [`docs/PROGRESS.md`](./docs/PROGRESS.md).

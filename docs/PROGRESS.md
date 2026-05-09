@@ -13,6 +13,7 @@
 | 8 | Hierarchical sheets + multi-layer PCBs (extra-spec) | ✅ completada |
 | 9 | Manufacturing outputs (gerbers, drill, BOM, render, fab package) | ✅ completada |
 | 10 | Design rules + net classes + auto-annotation + schematic↔PCB sync | ✅ completada |
+| 11 | Copper zones + mounting holes + silk text + fiducials + BOM enriquecido | ✅ completada |
 
 ## Fase 0 — checklist
 
@@ -229,9 +230,30 @@ sustituida en `.env`, `check_availability` devolverá ambos lados.
 - **`update_pcb_from_schematic` no añade footprints automáticamente.** Reporta `missing_in_pcb`; el caller usa `add_footprint` para los que falten y vuelve a llamar. Trade-off: más explícito; coste: dos pasos. Se podría unificar si lo necesitas.
 - **Annotation hace sort por posición KiCAD-Y** (ascendente = top-down). KiCAD GUI usa el mismo criterio.
 
+## Fase 11 — checklist
+
+- [x] `pcb_editor.add_zone(net_name, layer, polygon_mcp, ...)`: emit `(zone ...)` con polígono, fill yes, thermal relief default
+- [x] `pcb_editor.add_ground_plane(layer="B.Cu")`: extrae el outline del board (gr_rect Edge.Cuts) y crea zona GND
+- [x] `pcb_editor.add_silk_text(text, layer)`: F.SilkS / B.SilkS / F.Fab / B.Fab / F.Cu / B.Cu
+- [x] Tool MCP `add_zone`, `add_ground_plane`, `add_silk_text`
+- [x] Tool MCP `add_mounting_hole(diameter_mm, plated)`: **resolve por búsqueda en index**, no asume nombres exactos. Auto-numera H1, H2, ...
+- [x] Tool MCP `add_fiducial(size, layer)`: 0.5mm/0.75mm/1mm/1.5mm. Auto-numera FID1, FID2, ...
+- [x] `run_drc(refill_zones=True)`: pasa `--refill-zones --save-board` para que los polígonos se computen antes de validar
+- [x] `enrich_bom_with_sourcing`: lee BOM de KiCAD, hits DigiKey + Mouser por `Value` (configurable), append columnas `dk_*` / `mo_*`. Cache por query (no re-hits).
+- [x] Tests: 15 unit + 1 slow acceptance + 1 live network. Acceptance valida tablero 80×60 con outline + 2 R + 4 mounting holes M3 + silk text + fiducial + GND plane → DRC `0 errors`. Live BOM: enriquecimiento real con DigiKey hit en LM358N.
+
+## Decisiones técnicas (Fase 11)
+
+- **GND plane = polígono = outline del board.** Más simple que recortes manuales. KiCAD respeta automáticamente `min_copper_edge_clearance` al rellenar.
+- **`add_mounting_hole` por búsqueda en el index.** El usuario pasa el diámetro de drill y el flag `plated`; nosotros buscamos `MountingHole_<d>mm*` y elegimos la variante simpler (`min(candidates, key=len)`). Robusto a las variaciones de naming en KiCAD libs.
+- **DRC con `--refill-zones --save-board`.** Sin `--save-board`, los polígonos rellenados solo viven en memoria durante DRC; con él, quedan en el archivo (mejor para visualización + handoff).
+- **BOM enrichment usa cache por query.** Si tres líneas del BOM tienen `Value="10k"`, solo una llamada a DigiKey y una a Mouser. Reduce rate-limiting drásticamente.
+- **`sourcing_field` configurable.** Por defecto "Value" (lo que KiCAD escribe sin más config), pero el usuario puede pasar "MPN" si su esquema tiene ese campo custom.
+- **Errores parciales surfaced.** Si Mouser falla auth, las columnas `mo_*` quedan vacías y el `errors` dict del resultado lo refleja — el resto del BOM sigue enriquecido.
+
 ## Resumen del proyecto
 
-**59 tools MCP** registrados. **113 tests rápidos + 23 acceptance**. 11 commits limpios.
+**65 tools MCP** registrados. **128 tests rápidos + 25 acceptance**. 12 commits limpios.
 
 ## Notas
 

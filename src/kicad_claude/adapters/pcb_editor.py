@@ -499,6 +499,198 @@ def add_via(
 
 
 # --------------------------------------------------------------------------- #
+# Copper zones (pours)
+# --------------------------------------------------------------------------- #
+
+
+def get_board_outline_polygon_kicad(tree: list) -> list[tuple[float, float]] | None:
+    """Extract the board outline as KiCAD-coord (x, y) points.
+
+    Currently supports rectangular outlines (`gr_rect` on Edge.Cuts), since
+    that's what `set_board_outline` produces. Returns None if no rectangular
+    Edge.Cuts is found.
+    """
+    for node in find_children(tree, "gr_rect"):
+        layer = find_child(node, "layer")
+        if not layer or len(layer) < 2 or layer[1] != "Edge.Cuts":
+            continue
+        start = find_child(node, "start")
+        end = find_child(node, "end")
+        if not (start and end and len(start) >= 3 and len(end) >= 3):
+            continue
+        x1, y1 = float(start[1]), float(start[2])
+        x2, y2 = float(end[1]), float(end[2])
+        # Counter-clockwise from bottom-left in KiCAD's Y-down system, which is
+        # actually clockwise visually. KiCAD doesn't care about winding order.
+        return [(x1, y1), (x2, y1), (x2, y2), (x1, y2)]
+    return None
+
+
+def add_zone(
+    tree: list,
+    *,
+    net_name: str,
+    layer: str,
+    polygon_mcp: list[tuple[float, float]],
+    fill_clearance_mm: float = 0.5,
+    min_thickness_mm: float = 0.25,
+    thermal_gap_mm: float = 0.5,
+    thermal_bridge_mm: float = 0.5,
+    name: str = "",
+    priority: int = 0,
+) -> list:
+    """Add a filled copper zone for `net_name` on `layer` covering `polygon_mcp`.
+
+    Polygon points are in MCP coordinates (Y up). The zone is declared as
+    `(fill yes)` so KiCAD's DRC will compute the filled regions on demand
+    (refill via `kicad-cli pcb drc --refill-zones` or in the GUI).
+
+    `layer` may be a single copper layer ("F.Cu", "B.Cu", "In1.Cu", …) or
+    a glob like "*.Cu" for every copper layer.
+    """
+    if not polygon_mcp or len(polygon_mcp) < 3:
+        raise ValueError("polygon needs at least 3 points")
+
+    # Resolve net index by name
+    nets = find_children(tree, "net")
+    net_idx = 0
+    for n in nets:
+        if (
+            len(n) >= 3
+            and isinstance(n[2], str)
+            and n[2] == net_name
+        ):
+            net_idx = int(n[1])
+            break
+    else:
+        # Allocate a new (net N "name") at the top level
+        if net_name:
+            next_idx = max(
+                (int(n[1]) for n in nets if len(n) >= 2),
+                default=-1,
+            ) + 1
+            tree.insert(_first_child_index(tree, "footprint", default=len(tree)),
+                        [sym("net"), next_idx, net_name])
+            net_idx = next_idx
+
+    page_h = page_height_mm(tree)
+    pts_kicad = [mcp_to_kicad_xy(x, y, page_h) for (x, y) in polygon_mcp]
+    pts_block: list[Any] = [sym("pts")]
+    for x, y in pts_kicad:
+        pts_block.append([sym("xy"), round_mm(x), round_mm(y)])
+
+    # Decide layer node: `layer` for single, `layers` for multiple
+    if "*" in layer:
+        layer_node = [sym("layers"), layer]
+    else:
+        layer_node = [sym("layer"), layer]
+
+    zone_node = [
+        sym("zone"),
+        [sym("net"), net_idx],
+        [sym("net_name"), net_name],
+        layer_node,
+        [sym("uuid"), str(uuid.uuid4())],
+        [sym("name"), name or f"{net_name}_{layer}"],
+        [sym("hatch"), sym("edge"), 0.5],
+        [sym("priority"), priority],
+        [sym("connect_pads"), [sym("clearance"), round_mm(fill_clearance_mm)]],
+        [sym("min_thickness"), round_mm(min_thickness_mm)],
+        [sym("filled_areas_thickness"), sym("no")],
+        [
+            sym("fill"),
+            sym("yes"),
+            [sym("thermal_gap"), round_mm(thermal_gap_mm)],
+            [sym("thermal_bridge_width"), round_mm(thermal_bridge_mm)],
+            [sym("smoothing"), sym("none")],
+            [sym("radius"), 1.0],
+            [sym("island_removal_mode"), 0],
+            [sym("island_area_min"), 10.0],
+        ],
+        [sym("polygon"), pts_block],
+    ]
+    tree.append(zone_node)
+    return zone_node
+
+
+def add_ground_plane(
+    tree: list,
+    *,
+    layer: str = "B.Cu",
+    net_name: str = "GND",
+    fill_clearance_mm: float = 0.5,
+) -> list:
+    """Convenience: pour a ground plane on `layer` covering the whole board."""
+    poly_kicad = get_board_outline_polygon_kicad(tree)
+    if poly_kicad is None:
+        raise RuntimeError(
+            "no board outline found; call set_board_outline first so the zone "
+            "knows what area to fill."
+        )
+    page_h = page_height_mm(tree)
+    poly_mcp = [(x, page_h - y) for (x, y) in poly_kicad]
+    return add_zone(
+        tree,
+        net_name=net_name,
+        layer=layer,
+        polygon_mcp=poly_mcp,
+        fill_clearance_mm=fill_clearance_mm,
+        name=f"{net_name}_{layer}",
+    )
+
+
+def _first_child_index(tree: list, head: str, default: int) -> int:
+    for i, c in enumerate(tree[1:], start=1):
+        if is_call(c, head):
+            return i
+    return default
+
+
+# --------------------------------------------------------------------------- #
+# Silk / fab text
+# --------------------------------------------------------------------------- #
+
+
+def add_silk_text(
+    tree: list,
+    *,
+    text: str,
+    x_mm: float,
+    y_mm: float,
+    layer: str = "F.SilkS",
+    size_mm: float = 1.0,
+    rotation: float = 0,
+    thickness_mm: float | None = None,
+) -> list:
+    """Add a `(gr_text ...)` to the PCB, default on F.SilkS.
+
+    Common layers: F.SilkS, B.SilkS, F.Fab, B.Fab, F.Cu, B.Cu (text on copper).
+    """
+    if thickness_mm is None:
+        thickness_mm = round_mm(size_mm * 0.15)
+    rot = normalize_rotation(rotation)
+    page_h = page_height_mm(tree)
+    xk, yk = mcp_to_kicad_xy(x_mm, y_mm, page_h)
+    node = [
+        sym("gr_text"),
+        text,
+        [sym("at"), round_mm(xk), round_mm(yk), rot],
+        [sym("layer"), layer],
+        [sym("uuid"), str(uuid.uuid4())],
+        [
+            sym("effects"),
+            [
+                sym("font"),
+                [sym("size"), round_mm(size_mm), round_mm(size_mm)],
+                [sym("thickness"), round_mm(thickness_mm)],
+            ],
+        ],
+    ]
+    tree.append(node)
+    return node
+
+
+# --------------------------------------------------------------------------- #
 # List / export
 # --------------------------------------------------------------------------- #
 

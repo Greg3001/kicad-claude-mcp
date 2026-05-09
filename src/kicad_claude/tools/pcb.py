@@ -227,6 +227,241 @@ def register(mcp) -> None:
         }
 
     @mcp.tool()
+    def add_zone(
+        net_name: str,
+        layer: str,
+        polygon_mm: list,
+        fill_clearance_mm: float = 0.5,
+        min_thickness_mm: float = 0.25,
+        name: str = "",
+    ) -> dict:
+        """Add a copper zone (pour) to `net_name` on `layer`.
+
+        `polygon_mm` is a list of `[x_mm, y_mm]` points in MCP coords (Y up).
+        At least 3 points required. Layer can be a single copper layer
+        ("F.Cu", "B.Cu", "In1.Cu", …) or "*.Cu" for all signal layers.
+
+        After adding zones, run `run_drc(refill_zones=True)` so KiCAD
+        computes the actual filled regions before validation.
+        """
+        polygon = [(float(p[0]), float(p[1])) for p in polygon_mm]
+        tree, path = _load_active_pcb()
+        ed.add_zone(
+            tree,
+            net_name=net_name, layer=layer, polygon_mcp=polygon,
+            fill_clearance_mm=fill_clearance_mm,
+            min_thickness_mm=min_thickness_mm,
+            name=name,
+        )
+        backup = _save_with_backup(tree, path)
+        return {
+            "net_name": net_name,
+            "layer": layer,
+            "vertices": len(polygon),
+            "backup": str(backup) if backup else None,
+        }
+
+    @mcp.tool()
+    def add_ground_plane(
+        layer: str = "B.Cu",
+        net_name: str = "GND",
+        fill_clearance_mm: float = 0.5,
+    ) -> dict:
+        """Pour a ground plane covering the whole board on `layer`.
+
+        Reads the board outline (must exist — call `set_board_outline` first),
+        creates a zone polygon matching it, and assigns it to `net_name`.
+        Defaults: B.Cu / GND (the most common pattern).
+        """
+        tree, path = _load_active_pcb()
+        ed.add_ground_plane(
+            tree, layer=layer, net_name=net_name,
+            fill_clearance_mm=fill_clearance_mm,
+        )
+        backup = _save_with_backup(tree, path)
+        return {
+            "layer": layer,
+            "net_name": net_name,
+            "backup": str(backup) if backup else None,
+        }
+
+    @mcp.tool()
+    def add_silk_text(
+        text: str,
+        x_mm: float,
+        y_mm: float,
+        layer: str = "F.SilkS",
+        size_mm: float = 1.0,
+        rotation: float = 0,
+    ) -> dict:
+        """Add silkscreen text to the PCB.
+
+        `layer`: F.SilkS / B.SilkS (silkscreen) or F.Fab / B.Fab (fab notes).
+        For text on copper, use F.Cu / B.Cu — handy for IDs etched into copper.
+        """
+        tree, path = _load_active_pcb()
+        ed.add_silk_text(
+            tree, text=text, x_mm=x_mm, y_mm=y_mm,
+            layer=layer, size_mm=size_mm, rotation=rotation,
+        )
+        backup = _save_with_backup(tree, path)
+        return {
+            "text": text,
+            "position_mm": [x_mm, y_mm],
+            "layer": layer,
+            "size_mm": size_mm,
+            "rotation": rotation,
+            "backup": str(backup) if backup else None,
+        }
+
+    @mcp.tool()
+    def add_mounting_hole(
+        x_mm: float,
+        y_mm: float,
+        diameter_mm: float = 3.2,
+        plated: bool = False,
+        reference: str | None = None,
+    ) -> dict:
+        """Add a mounting hole at (x_mm, y_mm) by drill diameter.
+
+        Common sizes:
+          - 2.2 mm → M2 screw
+          - 2.7 mm → M2.5 screw
+          - 3.2 mm → M3 screw
+          - 4.3 mm → M4 screw
+          - 5.3 mm → M5 screw
+
+        `plated=True` picks a `_Pad` variant (annular ring around the hole,
+        useful for grounding the chassis). `plated=False` picks the bare
+        non-plated through-hole.
+        """
+        idx = lib_tools._ensure_index()
+        diam_str = f"{diameter_mm:g}"  # 3.2 → "3.2", 3.0 → "3"
+        prefix = f"MountingHole:MountingHole_{diam_str}mm"
+
+        candidates = [k for k in idx["footprints"] if k.startswith(prefix)]
+        if plated:
+            preferred = [
+                k for k in candidates
+                if "_Pad" in k
+                and "TopOnly" not in k
+                and "TopBottom" not in k
+                and "Via" not in k
+            ]
+        else:
+            preferred = [k for k in candidates if "_Pad" not in k]
+        chosen = preferred or candidates
+        if not chosen:
+            available = sorted({
+                f.split(":", 1)[1].split("_M")[0]
+                for f in idx["footprints"]
+                if f.startswith("MountingHole:MountingHole_")
+            })
+            raise FileNotFoundError(
+                f"no MountingHole footprint for diameter {diameter_mm} mm "
+                f"(plated={plated}). Available diameters: {available}"
+            )
+        lib_id = min(chosen, key=len)  # simplest matching name
+
+        if reference is None:
+            tree, _ = _load_active_pcb()
+            existing_h = [
+                ref for ref in ed.all_footprint_references(tree)
+                if ref and ref.upper().startswith("H")
+                and ref[1:].isdigit()
+            ]
+            n = len(existing_h) + 1
+            reference = f"H{n}"
+
+        mod_path = _resolve_footprint(lib_id)
+        fp_def = ed.fetch_footprint_def(mod_path)
+        tree, path = _load_active_pcb()
+        ed.add_footprint(
+            tree,
+            qualified_lib_id=lib_id,
+            reference=reference,
+            value=f"{diameter_mm}mm",
+            x_mm=x_mm, y_mm=y_mm,
+            rotation=0, layer="F.Cu",
+            fp_def_node=fp_def,
+        )
+        backup = _save_with_backup(tree, path)
+        return {
+            "reference": reference,
+            "lib_id": lib_id,
+            "diameter_mm": diameter_mm,
+            "plated": plated,
+            "position_mm": [x_mm, y_mm],
+            "backup": str(backup) if backup else None,
+        }
+
+    @mcp.tool()
+    def add_fiducial(
+        x_mm: float,
+        y_mm: float,
+        size: str = "1mm",
+        layer: str = "F.Cu",
+        reference: str | None = None,
+    ) -> dict:
+        """Add a fiducial marker (for pick-and-place camera registration).
+
+        `size` ∈ {"0.5mm", "0.75mm", "1mm", "1.5mm"}. Standard PnP machines
+        need 3 fiducials per side, ideally near board corners. Layer defines
+        which side: F.Cu (top fiducial) or B.Cu (bottom fiducial).
+        """
+        if size not in {"0.5mm", "0.75mm", "1mm", "1.5mm"}:
+            raise ValueError(f"size must be one of 0.5mm, 0.75mm, 1mm, 1.5mm (got {size!r})")
+        lib_id = f"Fiducial:Fiducial_{size}_Mask{size.replace('mm', '')}mm"
+        # Several fiducial naming conventions exist; try the simpler one first.
+        idx = lib_tools._ensure_index()
+        if lib_id not in idx["footprints"]:
+            # Common alternative names
+            for cand in (
+                f"Fiducial:Fiducial_{size}_Mask{size.replace('mm','')}mm",
+                f"Fiducial:Fiducial_{size}_Mask2mm",
+                f"Fiducial:Fiducial_{size}_CopperTop",
+            ):
+                if cand in idx["footprints"]:
+                    lib_id = cand
+                    break
+            else:
+                raise FileNotFoundError(
+                    f"no Fiducial footprint matches size {size!r} in the index. "
+                    f"Try add_footprint with an explicit Fiducial:* lib_id."
+                )
+
+        if reference is None:
+            tree, _ = _load_active_pcb()
+            existing = [
+                ref for ref in ed.all_footprint_references(tree)
+                if ref and ref.startswith("FID")
+            ]
+            n = len(existing) + 1
+            reference = f"FID{n}"
+
+        mod_path = _resolve_footprint(lib_id)
+        fp_def = ed.fetch_footprint_def(mod_path)
+        tree, path = _load_active_pcb()
+        ed.add_footprint(
+            tree,
+            qualified_lib_id=lib_id,
+            reference=reference,
+            value=size,
+            x_mm=x_mm, y_mm=y_mm,
+            rotation=0, layer=layer,
+            fp_def_node=fp_def,
+        )
+        backup = _save_with_backup(tree, path)
+        return {
+            "reference": reference,
+            "lib_id": lib_id,
+            "size": size,
+            "layer": layer,
+            "position_mm": [x_mm, y_mm],
+            "backup": str(backup) if backup else None,
+        }
+
+    @mcp.tool()
     def add_via(
         x_mm: float,
         y_mm: float,

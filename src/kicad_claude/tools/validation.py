@@ -44,6 +44,7 @@ def register(mcp) -> None:
         severity: str = "all",
         schematic_parity: bool = True,
         all_track_errors: bool = False,
+        refill_zones: bool = False,
         timeout_seconds: float = 120.0,
     ) -> dict:
         """Run KiCAD's Design Rules Check on the active PCB.
@@ -52,6 +53,8 @@ def register(mcp) -> None:
             severity: 'all', 'error', 'warning', or 'exclusions'.
             schematic_parity: include parity check between PCB and schematic.
             all_track_errors: report each individual track error (more verbose).
+            refill_zones: refill zones before validation (use after add_zone /
+                add_ground_plane). Saves the board with refilled zones.
             timeout_seconds: hard cap.
 
         Returns counts, violations, unconnected items, parity findings, and
@@ -63,5 +66,6 @@ def register(mcp) -> None:
             severity=severity,
             schematic_parity=schematic_parity,
             all_track_errors=all_track_errors,
+            refill_zones=refill_zones,
             timeout=timeout_seconds,
         )
