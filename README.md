@@ -8,11 +8,22 @@ Full implementation spec: [`kicad-claude-mcp-spec.md`](./kicad-claude-mcp-spec.m
 
 ## Status
 
-**Phase 0 — Bootstrap.** Only the `ping` tool is wired up. Real KiCAD tools
-land in subsequent phases (project management, library indexing, schematic
-editing, sourcing, PCB layout, autorouting, validation).
+**All 8 phases complete (0–7).** 35 MCP tools registered. 80 fast tests +
+10 acceptance tests pass.
 
-Phase progress is tracked in [`docs/PROGRESS.md`](./docs/PROGRESS.md).
+| Phase | What it adds | Tools |
+|------|--------------|-------|
+| 0 | Bootstrap | `ping` |
+| 1 | Project management | `create_project`, `set_project`, `get_project_state`, `list_components` |
+| 2 | KiCAD library indexer + fuzzy search | `index_libraries`, `list_libraries`, `search_symbol`, `search_footprint`, `get_symbol_details` |
+| 3 | Schematic editing | `add_symbol`, `remove_symbol`, `move_symbol`, `add_wire`, `add_label`, `add_power_symbol`, `add_no_connect`, `list_pins`, `get_pin_position` |
+| 4 | External sourcing (DigiKey, Mouser, vendor ZIP import) | `check_availability`, `find_or_fetch_symbol`, `import_vendor_zip`, `list_vendor_parts` |
+| 5 | PCB editing | `set_board_outline`, `list_footprints`, `add_footprint`, `move_footprint`, `place_footprints_grid`, `add_track`, `add_via` |
+| 6 | Autorouting via Freerouting 2.1.0 | `autoroute_pcb`, `export_dsn`, `import_ses` |
+| 7 | Validation (ERC/DRC via `kicad-cli`) | `run_erc`, `run_drc` |
+
+Phase-by-phase notes and the technical decisions that diverge from the spec
+live in [`docs/PROGRESS.md`](./docs/PROGRESS.md).
 
 ## Requirements
 

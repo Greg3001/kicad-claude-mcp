@@ -9,7 +9,7 @@
 | 4 | Sourcing externo (DigiKey/Mouser/SnapEDA) | ✅ completada (Mouser pendiente de Search API key correcta) |
 | 5 | Edición del PCB | ✅ completada |
 | 6 | Autorouting con Freerouting | ✅ completada |
-| 7 | Validación (ERC/DRC) | ⬜ pendiente |
+| 7 | Validación (ERC/DRC) | ✅ completada |
 
 ## Fase 0 — checklist
 
@@ -124,6 +124,25 @@ sustituida en `.env`, `check_availability` devolverá ambos lados.
 - **Path resolution para `freerouting.jar`**: 1) env `FREEROUTING_JAR`, 2) `<repo>/third_party/freerouting.jar`. Mismo patrón para `KICAD_PYTHON` y `JAVA_BIN`.
 - **Stats parsing best-effort**: regex sobre stdout/stderr de Freerouting. Para campos que avanzan (passes_done, completion_pct) tomamos el último match (estado final). Para totales (vias, longitud) el primero/único.
 - **Timeout duro** en `freerouting.route`: si supera `timeout_seconds` se aborta con error claro (sin esto Freerouting puede correr indefinidamente en boards patológicos).
+
+## Fase 7 — checklist
+
+- [x] `adapters/kicad_cli.py`: wrapper de `kicad-cli sch erc --format json` y `pcb drc --format json`. Parser estructurado: counts por severidad (`error`, `warning`, `exclusion`), violations con posición, raw JSON path para inspección humana.
+- [x] DRC opcionalmente `--schematic-parity` y `--all-track-errors`.
+- [x] `tools/validation.py`: 2 tools (`run_erc`, `run_drc`).
+- [x] Tests: 3 unit (sobre payload sintético) + 3 acceptance (kicad-cli real).
+- [x] **Acceptance**: ERC y DRC ejecutan limpios sobre divisor de tensión, JSON parseado, conteos por severidad correctos.
+
+## Decisiones técnicas (Fase 7)
+
+- **`kicad-cli` v10 sí expone JSON estructurado** vía `--format json`. Schemas oficiales de KiCAD: `schemas.kicad.org/erc.v1.json` y `schemas.kicad.org/drc.v1.json`.
+- **DRC tiene 3 buckets distintos** que conviene separar al cliente: `violations` (clearance, etc.), `unconnected_items` (nets sin rutear), `schematic_parity` (mismatches con esquema). Cada uno se devuelve por separado además del total.
+- **Severidad por defecto: `all`** (errors + warnings + exclusions). El usuario puede filtrar pasando `severity="error"` solo.
+- **Raw JSON path expuesto** en cada respuesta (`raw_path`) por si quiere inspección a mano o re-parse.
+
+## Resumen del proyecto
+
+Todas las fases del spec completadas. **35 tools MCP** registrados. **80 tests rápidos + 10 acceptance**. Tiempo total de implementación: 1 sesión.
 
 ## Notas
 
