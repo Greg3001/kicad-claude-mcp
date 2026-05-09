@@ -11,7 +11,7 @@ import logging
 import subprocess
 from collections import Counter
 from pathlib import Path
-from typing import Any
+from typing import Any, Iterable
 
 from kicad_claude.utils.kicad_paths import find_kicad_cli
 
@@ -31,6 +31,32 @@ def _ensure_cli() -> Path:
             "or set KICAD_CLI in the environment."
         )
     return cli
+
+
+def _run(args: list[str], *, timeout: float = 120.0, cwd: Path | None = None) -> tuple[str, str]:
+    """Invoke `kicad-cli` with `args`. Returns (stdout, stderr) on success."""
+    cli = _ensure_cli()
+    cmd = [str(cli), *args]
+    try:
+        r = subprocess.run(
+            cmd, capture_output=True, text=True,
+            timeout=timeout, check=False, cwd=str(cwd) if cwd else None,
+        )
+    except subprocess.TimeoutExpired as e:
+        raise KicadCliError(f"kicad-cli timed out after {timeout}s: {' '.join(cmd[1:4])}…") from e
+    if r.returncode != 0:
+        raise KicadCliError(
+            f"kicad-cli {' '.join(args[:3])} failed (rc={r.returncode}). "
+            f"stderr: {r.stderr[-300:]}"
+        )
+    return r.stdout, r.stderr
+
+
+def _list_files(p: Path) -> list[str]:
+    """Names of regular files directly inside `p`. Returns [] if p doesn't exist."""
+    if not p.is_dir():
+        return []
+    return sorted(f.name for f in p.iterdir() if f.is_file())
 
 
 def _summarize_violations(violations: list[dict]) -> Counter:
@@ -178,6 +204,287 @@ def run_drc(
 
     data = json.loads(output_json.read_text())
     return _shape_drc(data, output_json)
+
+
+# --------------------------------------------------------------------------- #
+# Manufacturing exports
+# --------------------------------------------------------------------------- #
+
+
+def export_gerbers(
+    pcb_path: Path,
+    output_dir: Path,
+    *,
+    layers: Iterable[str] | None = None,
+    timeout: float = 120.0,
+) -> dict:
+    """Run `kicad-cli pcb export gerbers`. Writes one file per layer + .gbrjob.
+
+    Default layers (when `layers=None`) follow the project's plot settings.
+    """
+    pcb_path = Path(pcb_path).expanduser().resolve()
+    output_dir = Path(output_dir).expanduser().resolve()
+    output_dir.mkdir(parents=True, exist_ok=True)
+
+    args = ["pcb", "export", "gerbers", "-o", str(output_dir)]
+    if layers:
+        args += ["--layers", ",".join(layers)]
+    args.append(str(pcb_path))
+
+    before = set(_list_files(output_dir))
+    _run(args, timeout=timeout)
+    after = set(_list_files(output_dir))
+    written = sorted(after - before)
+    return {
+        "kind": "gerbers",
+        "output_dir": str(output_dir),
+        "files": written,
+        "file_count": len(written),
+    }
+
+
+def export_drill(
+    pcb_path: Path,
+    output_dir: Path,
+    *,
+    drill_format: str = "excellon",
+    generate_map: bool = True,
+    map_format: str = "pdf",
+    excellon_separate_th: bool = True,
+    timeout: float = 60.0,
+) -> dict:
+    """Run `kicad-cli pcb export drill`."""
+    pcb_path = Path(pcb_path).expanduser().resolve()
+    output_dir = Path(output_dir).expanduser().resolve()
+    output_dir.mkdir(parents=True, exist_ok=True)
+
+    args = ["pcb", "export", "drill",
+            "-o", str(output_dir),
+            "--format", drill_format]
+    if generate_map:
+        args += ["--generate-map", "--map-format", map_format]
+    if excellon_separate_th:
+        args.append("--excellon-separate-th")
+    args.append(str(pcb_path))
+
+    before = set(_list_files(output_dir))
+    _run(args, timeout=timeout)
+    after = set(_list_files(output_dir))
+    written = sorted(after - before)
+    return {
+        "kind": "drill",
+        "output_dir": str(output_dir),
+        "files": written,
+        "file_count": len(written),
+    }
+
+
+def export_pos(
+    pcb_path: Path,
+    output_path: Path,
+    *,
+    side: str = "both",
+    fmt: str = "csv",
+    units: str = "mm",
+    smd_only: bool = False,
+    exclude_dnp: bool = False,
+    timeout: float = 60.0,
+) -> dict:
+    """Run `kicad-cli pcb export pos`."""
+    if side not in ("front", "back", "both"):
+        raise KicadCliError(f"side must be front/back/both (got {side!r})")
+    if fmt not in ("ascii", "csv", "gerber"):
+        raise KicadCliError(f"format must be ascii/csv/gerber (got {fmt!r})")
+
+    pcb_path = Path(pcb_path).expanduser().resolve()
+    output_path = Path(output_path).expanduser().resolve()
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+
+    args = ["pcb", "export", "pos",
+            "-o", str(output_path),
+            "--side", side,
+            "--format", fmt,
+            "--units", units]
+    if smd_only:
+        args.append("--smd-only")
+    if exclude_dnp:
+        args.append("--exclude-dnp")
+    args.append(str(pcb_path))
+
+    _run(args, timeout=timeout)
+    if not output_path.is_file():
+        raise KicadCliError(f"pos file was not created at {output_path}")
+    return {
+        "kind": "pos",
+        "output_path": str(output_path),
+        "size_bytes": output_path.stat().st_size,
+        "side": side,
+        "format": fmt,
+    }
+
+
+def export_bom(
+    sch_path: Path,
+    output_path: Path,
+    *,
+    fields: str | None = None,
+    labels: str | None = None,
+    group_by: str | None = "Value",
+    sort_field: str = "Reference",
+    exclude_dnp: bool = False,
+    field_delimiter: str = ",",
+    timeout: float = 60.0,
+) -> dict:
+    """Run `kicad-cli sch export bom`. Writes a CSV (default delimiter)."""
+    sch_path = Path(sch_path).expanduser().resolve()
+    output_path = Path(output_path).expanduser().resolve()
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+
+    args = ["sch", "export", "bom",
+            "-o", str(output_path),
+            "--field-delimiter", field_delimiter]
+    if fields:
+        args += ["--fields", fields]
+    if labels:
+        args += ["--labels", labels]
+    if group_by:
+        args += ["--group-by", group_by]
+    if sort_field:
+        args += ["--sort-field", sort_field]
+    if exclude_dnp:
+        args.append("--exclude-dnp")
+    args.append(str(sch_path))
+
+    _run(args, timeout=timeout)
+    if not output_path.is_file():
+        raise KicadCliError(f"BOM was not created at {output_path}")
+    text = output_path.read_text(encoding="utf-8", errors="replace")
+    line_count = text.count("\n")
+    return {
+        "kind": "bom",
+        "output_path": str(output_path),
+        "size_bytes": output_path.stat().st_size,
+        "line_count": line_count,
+        "row_count": max(0, line_count - 1),  # minus header
+    }
+
+
+def export_netlist(
+    sch_path: Path,
+    output_path: Path,
+    *,
+    fmt: str = "kicadsexpr",
+    timeout: float = 60.0,
+) -> dict:
+    """Run `kicad-cli sch export netlist`."""
+    valid = {"kicadsexpr", "kicadxml", "cadstar", "orcadpcb2",
+             "spice", "spicemodel", "pads", "allegro"}
+    if fmt not in valid:
+        raise KicadCliError(f"format must be one of {sorted(valid)} (got {fmt!r})")
+
+    sch_path = Path(sch_path).expanduser().resolve()
+    output_path = Path(output_path).expanduser().resolve()
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+
+    args = ["sch", "export", "netlist",
+            "-o", str(output_path),
+            "--format", fmt,
+            str(sch_path)]
+    _run(args, timeout=timeout)
+    if not output_path.is_file():
+        raise KicadCliError(f"netlist was not created at {output_path}")
+    return {
+        "kind": "netlist",
+        "output_path": str(output_path),
+        "size_bytes": output_path.stat().st_size,
+        "format": fmt,
+    }
+
+
+def render_pcb(
+    pcb_path: Path,
+    output_path: Path,
+    *,
+    side: str = "top",
+    width: int = 1600,
+    height: int = 900,
+    quality: str = "basic",
+    rotate: str | None = None,
+    perspective: bool = False,
+    timeout: float = 180.0,
+) -> dict:
+    """Run `kicad-cli pcb render` to produce a PNG/JPEG.
+
+    `side`: top, bottom, left, right, front, back
+    `quality`: basic | high (high is much slower)
+    `rotate`: 'X,Y,Z' degrees, e.g. '-30,0,45' for isometric
+    """
+    if side not in ("top", "bottom", "left", "right", "front", "back"):
+        raise KicadCliError(f"unsupported side {side!r}")
+    pcb_path = Path(pcb_path).expanduser().resolve()
+    output_path = Path(output_path).expanduser().resolve()
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+
+    args = ["pcb", "render",
+            "-o", str(output_path),
+            "--side", side,
+            "--width", str(width),
+            "--height", str(height),
+            "--quality", quality]
+    if perspective:
+        args.append("--perspective")
+    if rotate:
+        args += ["--rotate", rotate]
+    args.append(str(pcb_path))
+
+    _run(args, timeout=timeout)
+    if not output_path.is_file():
+        raise KicadCliError(f"render output not created at {output_path}")
+    return {
+        "kind": "render",
+        "output_path": str(output_path),
+        "size_bytes": output_path.stat().st_size,
+        "side": side,
+        "dimensions": [width, height],
+        "quality": quality,
+    }
+
+
+def export_pcb_svg(
+    pcb_path: Path,
+    output_dir: Path,
+    *,
+    layers: Iterable[str] | None = None,
+    fit_page_to_board: bool = True,
+    black_and_white: bool = False,
+    timeout: float = 60.0,
+) -> dict:
+    """Run `kicad-cli pcb export svg`. By default writes one SVG per layer."""
+    pcb_path = Path(pcb_path).expanduser().resolve()
+    output_dir = Path(output_dir).expanduser().resolve()
+    output_dir.mkdir(parents=True, exist_ok=True)
+
+    args = ["pcb", "export", "svg",
+            "-o", str(output_dir),
+            "--mode-multi"]
+    if layers:
+        args += ["--layers", ",".join(layers)]
+    if fit_page_to_board:
+        args.append("--fit-page-to-board")
+    if black_and_white:
+        args.append("--black-and-white")
+    args.append(str(pcb_path))
+
+    before = set(_list_files(output_dir))
+    _run(args, timeout=timeout)
+    after = set(_list_files(output_dir))
+    written = sorted(after - before)
+    return {
+        "kind": "svg",
+        "output_dir": str(output_dir),
+        "files": written,
+        "file_count": len(written),
+    }
 
 
 def _shape_drc(data: dict, raw_path: Path) -> dict:

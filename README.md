@@ -8,8 +8,8 @@ Full implementation spec: [`kicad-claude-mcp-spec.md`](./kicad-claude-mcp-spec.m
 
 ## Status
 
-**All phases complete (0–8).** 42 MCP tools registered. 93 fast tests +
-14 acceptance tests pass.
+**Phases 0–9 complete.** 50 MCP tools registered. 98 fast tests +
+22 acceptance tests pass.
 
 | Phase | What it adds | Tools |
 |------|--------------|-------|
@@ -22,6 +22,7 @@ Full implementation spec: [`kicad-claude-mcp-spec.md`](./kicad-claude-mcp-spec.m
 | 6 | Autorouting via Freerouting 2.1.0 | `autoroute_pcb`, `export_dsn`, `import_ses` |
 | 7 | Validation (ERC/DRC via `kicad-cli`) | `run_erc`, `run_drc` |
 | 8 | Hierarchical sheets + 2-32 layer PCBs (extra-spec) | `add_sheet`, `set_active_sheet`, `get_active_sheet`, `list_sheets`, `add_hierarchical_label`, `add_sheet_pin` |
+| 9 | Manufacturing outputs (gerbers, drill, BOM, 3D render, SVG) | `export_gerbers`, `export_drill`, `export_pos`, `export_bom`, `export_netlist`, `render_pcb_3d`, `export_pcb_svg`, `export_fab_package` |
 
 Phase-by-phase notes and the technical decisions that diverge from the spec
 live in [`docs/PROGRESS.md`](./docs/PROGRESS.md).

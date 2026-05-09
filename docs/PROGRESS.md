@@ -11,6 +11,7 @@
 | 6 | Autorouting con Freerouting | ✅ completada |
 | 7 | Validación (ERC/DRC) | ✅ completada |
 | 8 | Hierarchical sheets + multi-layer PCBs (extra-spec) | ✅ completada |
+| 9 | Manufacturing outputs (gerbers, drill, BOM, render, fab package) | ✅ completada |
 
 ## Fase 0 — checklist
 
@@ -172,9 +173,26 @@ sustituida en `.env`, `check_availability` devolverá ambos lados.
 - **Sheet pins matched by name.** KiCAD asocia pins de un sheet placeholder en el padre con `hierarchical_label` del mismo nombre en el child. La posición geométrica del pin es decorativa; lo que importa es que coincida el nombre.
 - **`active_sheet` global** (no por proyecto). Switching de proyecto resetea a root automáticamente. Trade-off: más sencillo de razonar; coste: si abres dos proyectos en paralelo en el mismo proceso, el estado se interfiere.
 
+## Fase 9 — checklist
+
+- [x] `kicad_cli.py` extendido: `export_gerbers`, `export_drill`, `export_pos`, `export_bom`, `export_netlist`, `render_pcb`, `export_pcb_svg`. Helper `_run` reusable + `_list_files` para diff de output dir.
+- [x] `tools/manufacturing.py`: 8 tools (`export_gerbers`, `export_drill`, `export_pos`, `export_bom`, `export_netlist`, `render_pcb_3d`, `export_pcb_svg`, `export_fab_package`).
+- [x] **`export_fab_package`** — one-shot bundle: gerbers + drill + pos + BOM + render opcional, todo bajo `<project>/fab/` listo para zipear.
+- [x] Defaults sensatos: `<project>/fab/gerbers/`, `<project>/fab/drill/`, `<project>/fab/<name>-pos.csv`, etc. — el usuario no necesita pensar en paths.
+- [x] Validación de inputs en el adapter (side, format, etc.) → KicadCliError con mensajes claros.
+- [x] Tests: 5 unit + 8 acceptance (kicad-cli real). Render PNG produce >1KB, BOM CSV con headers, gerbers per-layer, drill PTH/NPTH separados.
+
+## Decisiones técnicas (Fase 9)
+
+- **PNG render por defecto** (transparente para PNG, opaco para JPEG según `--background` default de KiCAD). Quality `basic` por defecto: una placa pequeña ~1-2s. `high` puede tardar 30s+ pero queda bonito.
+- **Drill PTH/NPTH separados por defecto** (`--excellon-separate-th`). Es lo que pide JLCPCB y la mayoría de fabs.
+- **Drill map en PDF por defecto** (configurable a SVG/DXF/PS). El PDF es el más universal.
+- **POS en CSV con mm** por defecto (CSV facilita pick-and-place automatizado en JLCPCB/PCBWay).
+- **`export_fab_package` no aborta en errores parciales**: si el BOM falla por esquema vacío, sigue con el resto. Cada step retorna su propio dict (con `error` si falló) para que el caller decida.
+
 ## Resumen del proyecto
 
-**42 tools MCP** registrados. **93 tests rápidos + 14 acceptance**. 9 commits limpios.
+**50 tools MCP** registrados. **98 tests rápidos + 22 acceptance**. 10 commits limpios.
 
 ## Notas
 

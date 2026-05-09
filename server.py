@@ -14,6 +14,9 @@ Phases enabled here so far:
         move_footprint, place_footprints_grid, add_track, add_via)
     6 — autorouting (autoroute_pcb, export_dsn, import_ses) via Freerouting
     7 — validation (run_erc, run_drc) via kicad-cli + JSON parsing
+    8 — hierarchical sheets + multi-layer PCBs (extra-spec)
+    9 — manufacturing outputs (gerbers, drill, pos, BOM, netlist, render, SVG,
+        export_fab_package)
 
 Future phases register additional tool groups via the same `register(mcp)`
 pattern.
@@ -30,6 +33,7 @@ from mcp.server.fastmcp import FastMCP
 load_dotenv(Path(__file__).parent / ".env")
 
 from kicad_claude.tools.library import register as register_library_tools  # noqa: E402
+from kicad_claude.tools.manufacturing import register as register_manufacturing_tools  # noqa: E402
 from kicad_claude.tools.pcb import register as register_pcb_tools  # noqa: E402
 from kicad_claude.tools.project import register as register_project_tools  # noqa: E402
 from kicad_claude.tools.routing import register as register_routing_tools  # noqa: E402
@@ -57,6 +61,7 @@ register_sourcing_tools(mcp)
 register_pcb_tools(mcp)
 register_routing_tools(mcp)
 register_validation_tools(mcp)
+register_manufacturing_tools(mcp)
 
 
 if __name__ == "__main__":
