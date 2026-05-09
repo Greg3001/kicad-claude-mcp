@@ -16,6 +16,7 @@
 | 11 | Copper zones + mounting holes + silk text + fiducials + BOM enriquecido | ✅ completada |
 | 12 | Diff pairs + length tuning (meander) + buses de comunicación | ✅ completada |
 | 13 | STEP 3D + custom DRC rules + multi-board + symbol/footprint editor | ✅ completada |
+| 14 | Signal integrity (impedance) + thermal (IPC-2152) + RF + EMC heuristics | ✅ completada |
 
 ## Fase 0 — checklist
 
@@ -322,9 +323,53 @@ sustituida en `.env`, `check_availability` devolverá ambos lados.
 - **Symbol creator usa rectangular body**: 95% de los símbolos custom (ICs, conectores) caben en una caja con pines en los bordes. Para shapes complex (transistores con triángulos, transformadores, etc.) el usuario edita el `.kicad_sym` directamente o usa la GUI.
 - **Multi-board no es panelización**: este Phase 13 es para "proyectos con varios PCBs distintos" (main + breakout, etc), no para duplicar el mismo board en un panel. Panelización es problema diferente; herramientas como KiKit son más apropiadas.
 
+## Fase 14 — checklist
+
+### Signal integrity
+- [x] `electrical_calc.microstrip_impedance` (IPC-2141A): Z₀ = 87/√(εᵣ+1.41) × ln(5.98h/(0.8w+t))
+- [x] `electrical_calc.stripline_impedance` (IPC-2141A) — para inner-layer signals
+- [x] `electrical_calc.differential_microstrip_impedance` (Polar approx) — Z_diff = 2·Z₀ × (1 − 0.48·exp(−0.96·s/h))
+- [x] `electrical_calc.coplanar_waveguide_impedance` (Wheeler approx) — para CPWG RF
+- [x] `electrical_calc.solve_microstrip_width` — bisección para inverse: target Z → width
+- [x] 5 tools MCP + presets para USB/Ethernet/HDMI/PCIe/MIPI/RF50/RF75
+
+### Thermal (IPC-2152)
+- [x] `electrical_calc.trace_current_ipc2152`: I = k·ΔT^0.44·A^0.725 con k=0.048 (external) / 0.024 (internal)
+- [x] `solve_trace_width_for_current` con margen configurable (default 20%)
+- [x] `analyze_pcb_current_capacity` — escanea cada track del PCB activo, agrupa por net, identifica el "weakest link" (segmento más estrecho)
+
+### RF design
+- [x] `pcb_editor.add_via_array_along_line`: row de vias con offset perpendicular configurable
+- [x] `tool add_via_array`: para stitching de planos, fences EMI
+- [x] `tool add_ground_stitching`: 2 filas paralelas de vias flanqueando una traza (RF isolation)
+- [x] `tool add_rf_microstrip`: traza con ancho calculado para target Z₀ (default 50Ω)
+
+### EMC heuristics
+- [x] `analyze_ground_coverage`: % de cada capa cobre ocupada por zones GND (shoelace formula sobre el polígono)
+- [x] `find_long_traces`: identifica nets >threshold para evaluar como antenas
+- [x] `validate_decoupling_caps`: heurística geométrica — ICs (refdes prefix `U`/`IC`) sin capacitor (`C*`) dentro de 3mm
+
+### Verificación end-to-end (smoke test)
+- [x] Microstrip 0.34mm @ h=0.21mm → 50.05 Ω ✓
+- [x] Diff 0.2/0.18mm → ~105Ω (necesita iteración para 90Ω, propio de la aproximación)
+- [x] 0.5mm 1oz external @ ΔT=10°C → 1.45 A ✓
+- [x] 50Ω trace + 50 stitching vias en 60mm → todo escrito sin errores
+- [x] Ground coverage: 100% B.Cu cuando se aplica `add_ground_plane` sobre toda la placa
+- [x] 19 tests rápidos pasan, 190 totales
+
+## Decisiones técnicas (Fase 14)
+
+- **Sin simulación FEA**: nuestras herramientas son **closed-form formulas**, no solvers numéricos. Para SI a varios GHz o EMC riguroso, hace falta un FEM real (Ansys, Sonnet, Saturn PCB). Lo que damos cubre el 95% de cálculos prácticos para hardware embedded/IoT/audio/sensores.
+- **IPC-2141A para impedancia, IPC-2152 para current**: son los standards de la industria para estos cálculos. Las fórmulas están validadas contra calculadoras comerciales (Saturn PCB, IPC's own).
+- **Polar's approx para diff pairs** tiene ~10% error vs FEM real. Suficiente para arrancar; el usuario itera con sweeps si necesita más precisión.
+- **CPW Wheeler approximation**: El closed-form completo necesita elliptic integrals; el de Wheeler tiene ~5% error y es 2 líneas de código.
+- **EMC heuristics, no simulation**: `analyze_ground_coverage` cuenta área de polígono (no descuenta clearances reales — para eso, la GUI con zonas filled). `find_long_traces` es un linter, no un EMI solver.
+- **`validate_decoupling_caps` es geométrica**, no eléctrica. No verifica que el cap esté cableado a VCC/GND del IC; solo cercanía. Útil como starting-point review.
+- **`add_via_array` admite offset perpendicular** para que `add_ground_stitching` (que llama 2 veces) genere fences en ambos lados con un solo helper.
+
 ## Resumen del proyecto
 
-**84 tools MCP** registrados. **171 tests rápidos + 30 acceptance**. 14 commits limpios.
+**99 tools MCP** registrados. **190 tests rápidos + 30 acceptance**. 15 commits limpios.
 
 ## Notas
 

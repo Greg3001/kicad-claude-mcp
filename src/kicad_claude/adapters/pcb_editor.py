@@ -477,6 +477,69 @@ def add_track(
     return node
 
 
+def add_via_array_along_line(
+    tree: list,
+    *,
+    start_mm: tuple[float, float],
+    end_mm: tuple[float, float],
+    spacing_mm: float = 2.5,
+    drill_mm: float = 0.3,
+    diameter_mm: float = 0.6,
+    perpendicular_offset_mm: float = 0.0,
+    net_name: str | None = None,
+) -> list[list]:
+    """Place a row of vias along a line, optionally offset perpendicular.
+
+    Used for RF ground stitching (call once with `+offset` and once with
+    `-offset` to fence both sides of a trace) and for via stitching of
+    ground planes.
+
+    Returns the list of new (via ...) nodes appended to the tree.
+    """
+    if spacing_mm <= 0:
+        raise ValueError("spacing_mm must be positive")
+    page_h = page_height_mm(tree)
+
+    sx, sy = start_mm
+    ex, ey = end_mm
+    dx, dy = ex - sx, ey - sy
+    length = (dx * dx + dy * dy) ** 0.5
+    if length < 1e-6:
+        raise ValueError("start and end coincide")
+
+    ux, uy = dx / length, dy / length
+    # Perpendicular (math CCW)
+    px, py = -uy, ux
+
+    # Resolve net by name (if given)
+    net_idx = 0
+    if net_name:
+        idx = find_net_index(tree, net_name)
+        if idx is None:
+            raise KeyError(f"net {net_name!r} not found")
+        net_idx = idx
+
+    n = max(1, int(length / spacing_mm) + 1)
+    new_nodes: list[list] = []
+    for i in range(n):
+        t = (i / max(1, n - 1)) * length if n > 1 else 0.0
+        cx = sx + ux * t + px * perpendicular_offset_mm
+        cy = sy + uy * t + py * perpendicular_offset_mm
+        xk, yk = mcp_to_kicad_xy(cx, cy, page_h)
+        node = [
+            sym("via"),
+            [sym("at"), round_mm(xk), round_mm(yk)],
+            [sym("size"), round_mm(diameter_mm)],
+            [sym("drill"), round_mm(drill_mm)],
+            [sym("layers"), "F.Cu", "B.Cu"],
+            [sym("net"), net_idx],
+            [sym("uuid"), _uuid()],
+        ]
+        tree.append(node)
+        new_nodes.append(node)
+    return new_nodes
+
+
 def add_via(
     tree: list,
     x_mm: float,

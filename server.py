@@ -19,6 +19,11 @@ Phases enabled here so far:
         export_fab_package)
    10 — design rules + net classes + fab presets + auto-annotation +
         update_pcb_from_schematic (closes the schematic↔PCB loop)
+   11 — copper zones + mounting holes + silk + fiducials + sourcing-enriched BOM
+   12 — diff pairs + length tuning (meander) + schematic buses
+   13 — STEP 3D + custom DRC rules + multi-board + symbol/footprint editor
+   14 — signal integrity (impedance) + thermal (IPC-2152) + RF (CPW, stitching) +
+        EMC heuristics
 
 Future phases register additional tool groups via the same `register(mcp)`
 pattern.
@@ -34,16 +39,20 @@ from mcp.server.fastmcp import FastMCP
 # Load .env early so adapters can read API credentials at import/use time.
 load_dotenv(Path(__file__).parent / ".env")
 
+from kicad_claude.tools.emc import register as register_emc_tools  # noqa: E402
 from kicad_claude.tools.library import register as register_library_tools  # noqa: E402
 from kicad_claude.tools.library_create import register as register_library_create_tools  # noqa: E402
 from kicad_claude.tools.manufacturing import register as register_manufacturing_tools  # noqa: E402
 from kicad_claude.tools.pcb import register as register_pcb_tools  # noqa: E402
 from kicad_claude.tools.project import register as register_project_tools  # noqa: E402
+from kicad_claude.tools.rf import register as register_rf_tools  # noqa: E402
 from kicad_claude.tools.routing import register as register_routing_tools  # noqa: E402
 from kicad_claude.tools.rules import register as register_rules_tools  # noqa: E402
 from kicad_claude.tools.schematic import register as register_schematic_tools  # noqa: E402
+from kicad_claude.tools.signal_integrity import register as register_signal_integrity_tools  # noqa: E402
 from kicad_claude.tools.sourcing import register as register_sourcing_tools  # noqa: E402
 from kicad_claude.tools.sync import register as register_sync_tools  # noqa: E402
+from kicad_claude.tools.thermal import register as register_thermal_tools  # noqa: E402
 from kicad_claude.tools.validation import register as register_validation_tools  # noqa: E402
 from kicad_claude.utils.logging import setup_logging  # noqa: E402
 
@@ -70,6 +79,10 @@ register_manufacturing_tools(mcp)
 register_rules_tools(mcp)
 register_sync_tools(mcp)
 register_library_create_tools(mcp)
+register_signal_integrity_tools(mcp)
+register_thermal_tools(mcp)
+register_rf_tools(mcp)
+register_emc_tools(mcp)
 
 
 if __name__ == "__main__":
