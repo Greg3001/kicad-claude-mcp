@@ -299,8 +299,11 @@ def add_symbol(
     `instance_path` is the KiCAD instance path (e.g. `/<root_uuid>` for the
     root sheet, `/<root_uuid>/<sheet_uuid>` for a child). If None, defaults
     to `/<this_file's_uuid>` — only correct for non-hierarchical use.
+
+    Unannotated references (ending in `?`, e.g. `R?`) are explicitly allowed
+    to repeat — they're meant to be resolved later by `annotate_schematic`.
     """
-    if find_symbol_by_reference(tree, reference) is not None:
+    if not reference.endswith("?") and find_symbol_by_reference(tree, reference) is not None:
         raise ValueError(f"reference {reference!r} already exists")
 
     rot = normalize_rotation(rotation)

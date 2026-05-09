@@ -166,3 +166,110 @@ def import_ses(pcb_path: Path, ses_path: Path, timeout: float = 60.0) -> Path:
         _IMPORT_SES_SCRIPT, str(pcb_path), str(ses_path), timeout=timeout
     )
     return pcb_path
+
+
+# --------------------------------------------------------------------------- #
+# Apply netlist to PCB (poor man's "Update PCB from Schematic")
+# --------------------------------------------------------------------------- #
+
+_APPLY_NETLIST_SCRIPT = r"""
+import sys
+import json
+import xml.etree.ElementTree as ET
+import pcbnew
+
+pcb_path = sys.argv[1]
+xml_path = sys.argv[2]
+
+# Parse the kicadxml netlist: ref -> {pin -> net_name}
+tree = ET.parse(xml_path)
+root = tree.getroot()
+ref_to_pad_nets = {}
+all_nets = set()
+for net in root.findall("nets/net"):
+    net_name = net.get("name") or ""
+    if not net_name:
+        continue
+    all_nets.add(net_name)
+    for node in net.findall("node"):
+        ref = node.get("ref")
+        pin = node.get("pin")
+        if ref and pin:
+            ref_to_pad_nets.setdefault(ref, {})[pin] = net_name
+
+# Load the board
+board = pcbnew.LoadBoard(pcb_path)
+
+# Make sure every net from the schematic exists on the board.
+# `board.FindNet(name)` returns the NETINFO_ITEM or None — that's the
+# easiest existence check. SWIG's NETNAMES_MAP isn't a real dict.
+added_nets = 0
+for net_name in sorted(all_nets):
+    if board.FindNet(net_name) is None:
+        ni = pcbnew.NETINFO_ITEM(board, net_name)
+        board.Add(ni)
+        added_nets += 1
+
+# Walk footprints and update pad net assignments
+fps = list(board.GetFootprints())
+schematic_refs = set(ref_to_pad_nets.keys())
+pcb_refs = {fp.GetReference() for fp in fps}
+missing_in_pcb = sorted(schematic_refs - pcb_refs)
+
+pad_changes = 0
+matched = 0
+for fp in fps:
+    ref = fp.GetReference()
+    if ref not in ref_to_pad_nets:
+        continue
+    matched += 1
+    pad_nets = ref_to_pad_nets[ref]
+    for pad in fp.Pads():
+        num = pad.GetNumber()
+        if num in pad_nets:
+            net_obj = board.FindNet(pad_nets[num])
+            if net_obj is not None:
+                pad.SetNet(net_obj)
+                pad_changes += 1
+
+pcbnew.SaveBoard(pcb_path, board)
+
+result = {
+    "added_nets": added_nets,
+    "matched_footprints": matched,
+    "missing_in_pcb": missing_in_pcb,
+    "pad_assignments_made": pad_changes,
+    "schematic_references": len(schematic_refs),
+    "pcb_references": len(pcb_refs),
+    "schematic_nets": len(all_nets),
+}
+print("RESULT_JSON:" + json.dumps(result))
+"""
+
+
+def apply_netlist(pcb_path: Path, netlist_xml_path: Path, timeout: float = 90.0) -> dict:
+    """Apply a kicadxml netlist to the PCB: assign nets to pads, add missing nets.
+
+    The netlist must be in `kicadxml` format (use `export_netlist(format="kicadxml")`
+    to produce it). Footprints in the schematic that aren't on the PCB are
+    listed as `missing_in_pcb` — call `add_footprint` for each, then re-run.
+    """
+    pcb_path = Path(pcb_path).expanduser().resolve()
+    netlist_xml_path = Path(netlist_xml_path).expanduser().resolve()
+    if not pcb_path.is_file():
+        raise FileNotFoundError(pcb_path)
+    if not netlist_xml_path.is_file():
+        raise FileNotFoundError(netlist_xml_path)
+
+    out = _run_pcbnew_script(
+        _APPLY_NETLIST_SCRIPT, str(pcb_path), str(netlist_xml_path), timeout=timeout
+    )
+    # Parse the trailing RESULT_JSON: line.
+    result_line = next(
+        (line for line in reversed(out.splitlines()) if line.startswith("RESULT_JSON:")),
+        None,
+    )
+    if result_line is None:
+        raise KicadPythonError(f"apply_netlist script produced no result: {out[-300:]}")
+    import json
+    return json.loads(result_line[len("RESULT_JSON:"):])

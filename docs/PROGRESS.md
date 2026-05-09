@@ -12,6 +12,7 @@
 | 7 | Validación (ERC/DRC) | ✅ completada |
 | 8 | Hierarchical sheets + multi-layer PCBs (extra-spec) | ✅ completada |
 | 9 | Manufacturing outputs (gerbers, drill, BOM, render, fab package) | ✅ completada |
+| 10 | Design rules + net classes + auto-annotation + schematic↔PCB sync | ✅ completada |
 
 ## Fase 0 — checklist
 
@@ -190,9 +191,47 @@ sustituida en `.env`, `check_availability` devolverá ambos lados.
 - **POS en CSV con mm** por defecto (CSV facilita pick-and-place automatizado en JLCPCB/PCBWay).
 - **`export_fab_package` no aborta en errores parciales**: si el BOM falla por esquema vacío, sigue con el resto. Cada step retorna su propio dict (con `error` si falló) para que el caller decida.
 
+## Fase 10 — checklist
+
+### Design rules
+
+- [x] `adapters/project_settings.py`: load/save `.kicad_pro` JSON con helpers para `rules`, `classes`, `netclass_patterns`
+- [x] **5 fab presets**: `jlcpcb_2l_default`, `jlcpcb_2l_advanced`, `pcbway_default`, `oshpark_4l`, `permissive_prototype`
+- [x] **JSON keys correctos descubiertos** llamando `pcbnew.GetDesignSettings.SetX(FromMM(...))` y guardando: `min_clearance`, `min_track_width`, `min_via_diameter`, `min_via_drill`, `min_through_hole_diameter`, `min_hole_clearance`, `min_hole_to_hole`, `min_silk_clearance`, `min_text_height`, `min_text_thickness`, `min_copper_edge_clearance`, `allow_blind_buried_vias`, `allow_microvias`. Verificado: DRC sí los enforza (`Anchura de pista` violation con `min_track_width=2.0`).
+
+### Net classes
+
+- [x] `add_net_class(name, track_width, clearance, via_diameter, via_drill, diff_pair_width, diff_pair_gap)` — crea o actualiza
+- [x] `assign_net_class(net_pattern, class_name)` — pattern matching tipo glob (KiCAD)
+- [x] `list_net_classes` lista clases + sus patterns
+- [x] `remove_net_class` también elimina patterns colgantes
+
+### Annotation
+
+- [x] `adapters/annotation.py`: detecta `R?`/`U?`/etc., respeta refs ya numeradas (continúa el numeral), sort por posición top-down/left-right
+- [x] **Multi-sheet aware**: pasa el contador entre hojas, no se solapa entre root/children
+- [x] Actualiza `(reference ...)` dentro de `instances` block (necesario para que KiCAD lo reconozca)
+- [x] **Bug fix colateral**: `add_symbol` ahora permite refs con `?` duplicadas (se resuelven luego con annotate)
+
+### Schematic↔PCB sync
+
+- [x] `adapters/kicad_python.py`: extendido con `apply_netlist` que invoca `pcbnew.LoadBoard` + `FindNet` + `pad.SetNet` desde el Python bundled
+- [x] `tools/sync.py`:
+  - `annotate_schematic` (multi-sheet)
+  - `update_pcb_from_schematic` exporta netlist como `kicadxml` y lo aplica al .kicad_pcb
+- [x] **Acceptance E2E**: divisor con `R?, R?` → annotate → JLCPCB preset → footprints → update_pcb_from_schematic → autoroute → **Freerouting realmente rutea 1 segmento** (R1.pad2 ↔ R2.pad1, F.Cu, 0.2mm)
+
+## Decisiones técnicas (Fase 10)
+
+- **JSON keys verificadas empíricamente.** El probe inicial (escribir vía pcbnew Python y leer el `.kicad_pro`) reveló los nombres exactos. Sin esto habría sido fácil escribir `minClearance` (camelCase) o `min_clearance_mm` y que KiCAD no leyera nada.
+- **`apply_netlist` usa `kicadxml`** (no kicadsexpr) porque XML es más fácil de parsear con stdlib (`xml.etree`), y los nodos `<node ref pin>` son directos.
+- **`board.FindNet(name)` para existencia** — el SWIG `NETNAMES_MAP` no es un dict de Python; `FindNet(name)` retorna `None` o el `NETINFO_ITEM`, lo que sí funciona con el patrón `if … is None`.
+- **`update_pcb_from_schematic` no añade footprints automáticamente.** Reporta `missing_in_pcb`; el caller usa `add_footprint` para los que falten y vuelve a llamar. Trade-off: más explícito; coste: dos pasos. Se podría unificar si lo necesitas.
+- **Annotation hace sort por posición KiCAD-Y** (ascendente = top-down). KiCAD GUI usa el mismo criterio.
+
 ## Resumen del proyecto
 
-**50 tools MCP** registrados. **98 tests rápidos + 22 acceptance**. 10 commits limpios.
+**59 tools MCP** registrados. **113 tests rápidos + 23 acceptance**. 11 commits limpios.
 
 ## Notas
 

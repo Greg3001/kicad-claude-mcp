@@ -17,6 +17,8 @@ Phases enabled here so far:
     8 — hierarchical sheets + multi-layer PCBs (extra-spec)
     9 — manufacturing outputs (gerbers, drill, pos, BOM, netlist, render, SVG,
         export_fab_package)
+   10 — design rules + net classes + fab presets + auto-annotation +
+        update_pcb_from_schematic (closes the schematic↔PCB loop)
 
 Future phases register additional tool groups via the same `register(mcp)`
 pattern.
@@ -37,8 +39,10 @@ from kicad_claude.tools.manufacturing import register as register_manufacturing_
 from kicad_claude.tools.pcb import register as register_pcb_tools  # noqa: E402
 from kicad_claude.tools.project import register as register_project_tools  # noqa: E402
 from kicad_claude.tools.routing import register as register_routing_tools  # noqa: E402
+from kicad_claude.tools.rules import register as register_rules_tools  # noqa: E402
 from kicad_claude.tools.schematic import register as register_schematic_tools  # noqa: E402
 from kicad_claude.tools.sourcing import register as register_sourcing_tools  # noqa: E402
+from kicad_claude.tools.sync import register as register_sync_tools  # noqa: E402
 from kicad_claude.tools.validation import register as register_validation_tools  # noqa: E402
 from kicad_claude.utils.logging import setup_logging  # noqa: E402
 
@@ -62,6 +66,8 @@ register_pcb_tools(mcp)
 register_routing_tools(mcp)
 register_validation_tools(mcp)
 register_manufacturing_tools(mcp)
+register_rules_tools(mcp)
+register_sync_tools(mcp)
 
 
 if __name__ == "__main__":
