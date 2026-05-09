@@ -84,12 +84,12 @@ def register(mcp) -> None:
 
         # 2) Apply via pcbnew Python
         result = kicad_python.apply_netlist(
-            proj.pcb_path, netlist_xml, timeout=timeout_seconds
+            state.get_active_board_path(), netlist_xml, timeout=timeout_seconds
         )
 
         # 3) Surface the artifacts and a hint if any refs are missing
         result["netlist_path"] = str(netlist_xml)
-        result["pcb_path"] = str(proj.pcb_path)
+        result["pcb_path"] = str(state.get_active_board_path())
         if result.get("missing_in_pcb"):
             result["hint"] = (
                 "Some schematic references are not on the PCB. Place them "

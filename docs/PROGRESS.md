@@ -15,6 +15,7 @@
 | 10 | Design rules + net classes + auto-annotation + schematic↔PCB sync | ✅ completada |
 | 11 | Copper zones + mounting holes + silk text + fiducials + BOM enriquecido | ✅ completada |
 | 12 | Diff pairs + length tuning (meander) + buses de comunicación | ✅ completada |
+| 13 | STEP 3D + custom DRC rules + multi-board + symbol/footprint editor | ✅ completada |
 
 ## Fase 0 — checklist
 
@@ -286,9 +287,44 @@ sustituida en `.env`, `check_availability` devolverá ambos lados.
 - **Buses son visuales**: las conexiones eléctricas reales se hacen vía labels en wires individuales. El `bus_alias` solo permite escribir "DATA" en vez de "DATA[0..7]" en la línea, y KiCAD expande a los miembros declarados.
 - **`add_meander` no modifica trazas existentes**: el usuario borra el segmento recto en la GUI (o programáticamente con un futuro tool) y añade el meander entre los mismos endpoints. Trade-off: más explícito y reversible, sin tocar nada que no haya pedido.
 
+## Fase 13 — checklist
+
+### 3D STEP export
+- [x] `kicad_cli.export_step`: wrap completo con flags `--include-tracks/--include-zones/--include-silkscreen/--include-soldermask/--no-dnp/--component-filter`
+- [x] `tool export_step_3d` con defaults sensatos (board + components, basic quality)
+
+### Custom DRC rules
+- [x] `adapters/drc_rules.py`: read/write `.kicad_dru` (sexpdata para parse, text generation para write). Validación de constraint_type y severity.
+- [x] 4 tools: `add_drc_rule`, `list_drc_rules`, `remove_drc_rule`, `clear_drc_rules`
+- [x] Constraint types soportados: clearance, hole_clearance, silk_clearance, edge_clearance, courtyard_clearance, physical_clearance, track_width, via_diameter, via_drill, hole_size, diff_pair_gap, diff_pair_uncoupled, length, skew, text_height, annular_width, disallow, etc.
+- [x] **Acceptance**: regla `track_width >= 1mm` dispara violation contra una pista de 0.25mm.
+
+### Multi-board management
+- [x] `state.set_active_board / get_active_board_path`: tracking del PCB activo
+- [x] 3 tools: `add_board(name)` crea `.kicad_pcb` + registra en `.kicad_pro`'s `boards[]`, `list_boards`, `set_active_board`
+- [x] **Refactor cross-cutting**: `tools/pcb`, `tools/routing`, `tools/sync`, `tools/validation`, `tools/manufacturing` ahora usan `state.get_active_board_path()` en lugar de `proj.pcb_path`. Permite que TODO el flujo (autoroute, DRC, gerbers, etc.) trabaje con el board activo.
+- [x] State reset al cambiar proyecto (active_board → None)
+
+### Symbol/footprint editor
+- [x] `adapters/library_create.py`: `build_symbol_node` (rectangular body + pins) y `build_footprint_node` (pads + auto-courtyard + auto-silk-outline)
+- [x] Validación de pin_type (input/output/passive/power_in/...) y pad_type (smd/thru_hole/np_thru_hole) y shapes
+- [x] Auto-drill para THT pads: `max(0.3, min(sx, sy) - 0.4)` para anillo annular sensato
+- [x] 2 tools: `create_symbol(lib_name, symbol_name, pins, body_size, properties)`, `create_footprint(lib_name, footprint_name, pads, description, tags)`
+- [x] Reusa `vendor_import.update_sym_lib_table` / `update_fp_lib_table` para registrar libs en el proyecto
+- [x] **Acceptance**: opamp custom 5-pin + SOIC-8 SMD 8-pad → kicad-cli sch erc + pcb drc returncode 0.
+
+## Decisiones técnicas (Fase 13)
+
+- **Multi-board cross-cutting refactor**: añadir `active_board` requirió actualizar `proj.pcb_path` → `state.get_active_board_path()` en 5 archivos de tools. Aceptable trade-off por consistencia. Sin esto, autoroute/DRC/manufacturing ignoraban el board activo y operaban siempre sobre el main.
+- **`.kicad_dru` es text-level write**: escribimos rules como texto formateado (template strings), no via sexpdata. Reading sí usa sexpdata para tolerar archivos creados a mano. Más simple, menos fragility.
+- **`sexpdata.Symbol` no es `==` a string**: aprendido por dolor. `Symbol("0.5mm").__eq__("0.5mm")` es False porque Symbol's `__eq__` solo matches Symbol→Symbol. Tuvimos que castear explícitamente en `_parse_dim`.
+- **Footprint creator auto-courtyard**: el F.CrtYd line outline alrededor del pad bounding box, inflado 0.25mm. Es lo que el DRC espera por defecto. Disable con `add_courtyard=False` si la app lo necesita.
+- **Symbol creator usa rectangular body**: 95% de los símbolos custom (ICs, conectores) caben en una caja con pines en los bordes. Para shapes complex (transistores con triángulos, transformadores, etc.) el usuario edita el `.kicad_sym` directamente o usa la GUI.
+- **Multi-board no es panelización**: este Phase 13 es para "proyectos con varios PCBs distintos" (main + breakout, etc), no para duplicar el mismo board en un panel. Panelización es problema diferente; herramientas como KiKit son más apropiadas.
+
 ## Resumen del proyecto
 
-**74 tools MCP** registrados. **148 tests rápidos + 26 acceptance**. 13 commits limpios.
+**84 tools MCP** registrados. **171 tests rápidos + 30 acceptance**. 14 commits limpios.
 
 ## Notas
 

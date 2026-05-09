@@ -28,16 +28,16 @@ def register(mcp) -> None:
     def export_dsn(output_path: str | None = None) -> dict:
         """Export the active PCB to Specctra DSN.
 
-        If `output_path` is None, writes alongside the .kicad_pcb with the
-        same stem and `.dsn` extension.
+        If `output_path` is None, writes alongside the active .kicad_pcb with
+        the same stem and `.dsn` extension.
         """
-        proj = state.get_active()
+        pcb_path = state.get_active_board_path()
         out = (
             Path(output_path).expanduser()
             if output_path
-            else proj.pcb_path.with_suffix(".dsn")
+            else pcb_path.with_suffix(".dsn")
         )
-        kicad_python.export_dsn(proj.pcb_path, out)
+        kicad_python.export_dsn(pcb_path, out)
         return {"dsn_path": str(out), "size_bytes": out.stat().st_size}
 
     @mcp.tool()
@@ -46,12 +46,12 @@ def register(mcp) -> None:
 
         A backup of the PCB is saved under `<project>/.backups/` before the import.
         """
-        proj = state.get_active()
+        pcb_path = state.get_active_board_path()
         ses = Path(ses_path).expanduser()
-        backup = sch_editor.backup_file(proj.pcb_path)
-        kicad_python.import_ses(proj.pcb_path, ses)
+        backup = sch_editor.backup_file(pcb_path)
+        kicad_python.import_ses(pcb_path, ses)
         return {
-            "pcb_path": str(proj.pcb_path),
+            "pcb_path": str(pcb_path),
             "ses_path": str(ses),
             "backup": str(backup) if backup else None,
         }
@@ -69,12 +69,12 @@ def register(mcp) -> None:
             timeout_seconds: Hard kill if Freerouting runs longer than this.
             threads: optional `-mt` threads count.
         """
-        proj = state.get_active()
-        dsn_path = proj.pcb_path.with_suffix(".dsn")
-        ses_path = proj.pcb_path.with_suffix(".ses")
+        pcb_path = state.get_active_board_path()
+        dsn_path = pcb_path.with_suffix(".dsn")
+        ses_path = pcb_path.with_suffix(".ses")
 
         # 1) Export DSN
-        kicad_python.export_dsn(proj.pcb_path, dsn_path)
+        kicad_python.export_dsn(pcb_path, dsn_path)
 
         # 2) Run Freerouting
         route_result = freerouting.route(
@@ -86,11 +86,11 @@ def register(mcp) -> None:
         )
 
         # 3) Backup and import SES back into the PCB
-        backup = sch_editor.backup_file(proj.pcb_path)
-        kicad_python.import_ses(proj.pcb_path, ses_path)
+        backup = sch_editor.backup_file(pcb_path)
+        kicad_python.import_ses(pcb_path, ses_path)
 
         return {
-            "pcb_path": str(proj.pcb_path),
+            "pcb_path": str(pcb_path),
             "dsn_path": str(dsn_path),
             "ses_path": str(ses_path),
             "passes": passes,

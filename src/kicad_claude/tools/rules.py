@@ -14,7 +14,7 @@ from __future__ import annotations
 import logging
 
 from kicad_claude import state
-from kicad_claude.adapters import project_settings as ps
+from kicad_claude.adapters import drc_rules, project_settings as ps
 
 logger = logging.getLogger("kicad-claude.tools.rules")
 
@@ -199,6 +199,102 @@ def register(mcp) -> None:
         entry = ps.assign_pattern(pro, netclass=class_name, pattern=net_pattern)
         ps.save_pro(proj.pro_path, pro)
         return {"assignment": entry}
+
+    # ----- Custom DRC rules (.kicad_dru) -------------------------------- #
+
+    @mcp.tool()
+    def add_drc_rule(
+        name: str,
+        constraint_type: str,
+        min_value_mm: float | None = None,
+        opt_value_mm: float | None = None,
+        max_value_mm: float | None = None,
+        condition: str = "",
+        severity: str = "error",
+        layer: str = "",
+    ) -> dict:
+        """Add a custom rule to the project's `.kicad_dru` file.
+
+        `constraint_type` examples:
+          - clearance, hole_clearance, edge_clearance, courtyard_clearance
+          - track_width, via_diameter, via_drill, hole_size
+          - diff_pair_gap, diff_pair_uncoupled
+          - length, skew (for matched-length groups)
+          - silk_clearance, text_height, text_thickness
+          - disallow (different syntax — pass condition only)
+
+        `condition` is KiCAD's expression language, e.g.:
+          - "A.NetClass == 'Power'"
+          - "A.Layer == 'F.Cu' && B.Layer == 'F.Cu'"
+          - "A.Net == '+5V' || B.Net == '+5V'"
+          - "A.intersectsArea('keepout1')"
+
+        Run `run_drc()` after to enforce. Replaces any existing rule with
+        the same name.
+        """
+        proj = state.get_active()
+        rule = {
+            "name": name,
+            "constraint_type": constraint_type,
+            "severity": severity,
+        }
+        if condition:
+            rule["condition"] = condition
+        if layer:
+            rule["layer"] = layer
+        if min_value_mm is not None:
+            rule["min_value"] = min_value_mm
+        if opt_value_mm is not None:
+            rule["opt_value"] = opt_value_mm
+        if max_value_mm is not None:
+            rule["max_value"] = max_value_mm
+
+        drc_rules.validate_rule(rule)
+
+        dru_path = proj.path / f"{proj.name}.kicad_dru"
+        rules = drc_rules.read_rules(dru_path)
+        rules = [r for r in rules if r.get("name") != name]
+        rules.append(rule)
+        drc_rules.write_rules(dru_path, rules)
+        return {
+            "rule": rule,
+            "dru_path": str(dru_path),
+            "total_rules": len(rules),
+        }
+
+    @mcp.tool()
+    def list_drc_rules() -> dict:
+        """List the custom DRC rules in the project's `.kicad_dru` file."""
+        proj = state.get_active()
+        dru_path = proj.path / f"{proj.name}.kicad_dru"
+        rules = drc_rules.read_rules(dru_path)
+        return {
+            "dru_path": str(dru_path),
+            "exists": dru_path.is_file(),
+            "rules": rules,
+            "total": len(rules),
+        }
+
+    @mcp.tool()
+    def remove_drc_rule(name: str) -> dict:
+        """Remove a custom DRC rule by name."""
+        proj = state.get_active()
+        dru_path = proj.path / f"{proj.name}.kicad_dru"
+        rules = drc_rules.read_rules(dru_path)
+        before = len(rules)
+        rules = [r for r in rules if r.get("name") != name]
+        if len(rules) == before:
+            raise KeyError(f"no DRC rule named {name!r}")
+        drc_rules.write_rules(dru_path, rules)
+        return {"removed": name, "remaining": len(rules)}
+
+    @mcp.tool()
+    def clear_drc_rules() -> dict:
+        """Remove every custom DRC rule (writes a `.kicad_dru` with only the version header)."""
+        proj = state.get_active()
+        dru_path = proj.path / f"{proj.name}.kicad_dru"
+        drc_rules.write_rules(dru_path, [])
+        return {"dru_path": str(dru_path), "cleared": True}
 
     @mcp.tool()
     def list_net_classes() -> dict:

@@ -60,9 +60,8 @@ def register(mcp) -> None:
         Returns counts, violations, unconnected items, parity findings, and
         the path to the raw JSON report.
         """
-        proj = state.get_active()
         return kicad_cli.run_drc(
-            proj.pcb_path,
+            state.get_active_board_path(),
             severity=severity,
             schematic_parity=schematic_parity,
             all_track_errors=all_track_errors,

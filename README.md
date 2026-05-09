@@ -8,8 +8,8 @@ Full implementation spec: [`kicad-claude-mcp-spec.md`](./kicad-claude-mcp-spec.m
 
 ## Status
 
-**Phases 0–12 complete.** 74 MCP tools registered. 148 fast tests +
-26 acceptance tests pass.
+**Phases 0–13 complete.** 84 MCP tools registered. 171 fast tests +
+30 acceptance tests pass.
 
 | Phase | What it adds | Tools |
 |------|--------------|-------|
@@ -26,6 +26,7 @@ Full implementation spec: [`kicad-claude-mcp-spec.md`](./kicad-claude-mcp-spec.m
 | 10 | Design rules + net classes + annotation + schematic↔PCB sync | `set_design_rules`, `apply_fab_preset`, `list_fab_presets`, `add_net_class`, `remove_net_class`, `assign_net_class`, `list_net_classes`, `annotate_schematic`, `update_pcb_from_schematic` |
 | 11 | Copper zones, mounting holes, silk, fiducials, sourcing-enriched BOM | `add_zone`, `add_ground_plane`, `add_silk_text`, `add_mounting_hole`, `add_fiducial`, `enrich_bom_with_sourcing` |
 | 12 | Diff pairs, length tuning (meander), schematic buses | `list_diff_pair_candidates`, `add_diff_pair_class`, `list_nets`, `compute_trace_length`, `validate_diff_pair_length_match`, `add_meander`, `add_bus`, `add_bus_entry`, `add_bus_alias` |
+| 13 | STEP 3D, custom DRC rules, multi-board, symbol/footprint creation | `export_step_3d`, `add_drc_rule`, `list_drc_rules`, `remove_drc_rule`, `clear_drc_rules`, `add_board`, `list_boards`, `set_active_board`, `create_symbol`, `create_footprint` |
 
 Phase-by-phase notes and the technical decisions that diverge from the spec
 live in [`docs/PROGRESS.md`](./docs/PROGRESS.md).

@@ -55,6 +55,20 @@ def _blank_pro(name: str) -> dict:
     }
 
 
+def write_blank_pcb(target_path: Path) -> Path:
+    """Write a single blank `.kicad_pcb` to `target_path` (no .kicad_pro / .kicad_sch).
+
+    Useful for multi-board projects (extra boards alongside the main one).
+    Raises FileExistsError if the path already exists.
+    """
+    target_path = Path(target_path)
+    if target_path.exists():
+        raise FileExistsError(f"{target_path} already exists")
+    target_path.parent.mkdir(parents=True, exist_ok=True)
+    target_path.write_text(_load_fixture("blank.kicad_pcb"))
+    return target_path
+
+
 def write_blank_schematic(target_path: Path) -> Path:
     """Write a single blank `.kicad_sch` to `target_path` (no .kicad_pcb / .kicad_pro).
 

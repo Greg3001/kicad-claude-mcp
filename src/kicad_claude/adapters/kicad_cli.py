@@ -454,6 +454,69 @@ def render_pcb(
     }
 
 
+def export_step(
+    pcb_path: Path,
+    output_path: Path,
+    *,
+    include_components: bool = True,
+    include_tracks: bool = False,
+    include_pads: bool = False,
+    include_zones: bool = False,
+    include_inner_copper: bool = False,
+    include_silkscreen: bool = False,
+    include_soldermask: bool = False,
+    no_unspecified: bool = False,
+    no_dnp: bool = False,
+    component_filter: str | None = None,
+    force: bool = True,
+    timeout: float = 240.0,
+) -> dict:
+    """Run `kicad-cli pcb export step` to produce a STEP 3D file.
+
+    By default exports just the board + components. Toggle the include_*
+    flags to add copper/silk/soldermask geometry to the STEP. Big boards
+    with all flags on can take minutes.
+    """
+    pcb_path = Path(pcb_path).expanduser().resolve()
+    output_path = Path(output_path).expanduser().resolve()
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+
+    args = ["pcb", "export", "step", "-o", str(output_path)]
+    if force:
+        args.append("--force")
+    if not include_components:
+        args.append("--no-components")
+    if include_tracks:
+        args.append("--include-tracks")
+    if include_pads:
+        args.append("--include-pads")
+    if include_zones:
+        args.append("--include-zones")
+    if include_inner_copper:
+        args.append("--include-inner-copper")
+    if include_silkscreen:
+        args.append("--include-silkscreen")
+    if include_soldermask:
+        args.append("--include-soldermask")
+    if no_unspecified:
+        args.append("--no-unspecified")
+    if no_dnp:
+        args.append("--no-dnp")
+    if component_filter:
+        args += ["--component-filter", component_filter]
+    args.append(str(pcb_path))
+
+    _run(args, timeout=timeout)
+    if not output_path.is_file():
+        raise KicadCliError(f"STEP file not produced at {output_path}")
+    return {
+        "kind": "step",
+        "output_path": str(output_path),
+        "size_bytes": output_path.stat().st_size,
+        "include_components": include_components,
+    }
+
+
 def export_pcb_svg(
     pcb_path: Path,
     output_dir: Path,

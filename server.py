@@ -35,6 +35,7 @@ from mcp.server.fastmcp import FastMCP
 load_dotenv(Path(__file__).parent / ".env")
 
 from kicad_claude.tools.library import register as register_library_tools  # noqa: E402
+from kicad_claude.tools.library_create import register as register_library_create_tools  # noqa: E402
 from kicad_claude.tools.manufacturing import register as register_manufacturing_tools  # noqa: E402
 from kicad_claude.tools.pcb import register as register_pcb_tools  # noqa: E402
 from kicad_claude.tools.project import register as register_project_tools  # noqa: E402
@@ -68,6 +69,7 @@ register_validation_tools(mcp)
 register_manufacturing_tools(mcp)
 register_rules_tools(mcp)
 register_sync_tools(mcp)
+register_library_create_tools(mcp)
 
 
 if __name__ == "__main__":

@@ -20,9 +20,13 @@ from __future__ import annotations
 import logging
 from pathlib import Path
 
+import json
+
 from kicad_claude import state
 from kicad_claude.adapters import pcb_editor as ed
+from kicad_claude.adapters import project_settings as ps
 from kicad_claude.adapters import sch_editor, sch_io
+from kicad_claude.templates.blank import write_blank_pcb
 from kicad_claude.tools import library as lib_tools
 
 logger = logging.getLogger("kicad-claude.tools.pcb")
@@ -34,9 +38,9 @@ logger = logging.getLogger("kicad-claude.tools.pcb")
 
 
 def _load_active_pcb() -> tuple[list, Path]:
-    proj = state.get_active()
-    tree = sch_io.parse_file(proj.pcb_path)
-    return tree, proj.pcb_path
+    pcb_path = state.get_active_board_path()
+    tree = sch_io.parse_file(pcb_path)
+    return tree, pcb_path
 
 
 def _save_with_backup(tree: list, pcb_path: Path) -> Path | None:
@@ -576,6 +580,77 @@ def register(mcp) -> None:
             "layer": layer,
             "net": net_name or "(unconnected)",
             "backup": str(backup) if backup else None,
+        }
+
+    # ----- Multi-board management ---------------------------------------- #
+
+    @mcp.tool()
+    def add_board(name: str) -> dict:
+        """Create an additional `.kicad_pcb` file in the project (multi-board).
+
+        Useful for projects with several physical boards (main + breakout +
+        debugger, for instance). The new board file is registered in the
+        project's `boards` list and made the active board.
+
+        Standard project flow continues to use the original `.kicad_pcb`
+        unless you switch via `set_active_board`.
+        """
+        proj = state.get_active()
+        if not name.endswith(".kicad_pcb"):
+            filename = f"{name}.kicad_pcb"
+        else:
+            filename = name
+        target = proj.path / filename
+        if target.is_file():
+            raise FileExistsError(f"{target} already exists")
+        write_blank_pcb(target)
+
+        # Register the board in the .kicad_pro `boards` array so KiCAD's
+        # Project Manager shows it.
+        pro = ps.load_pro(proj.pro_path)
+        boards = pro.setdefault("boards", [])
+        if filename not in boards:
+            boards.append(filename)
+        ps.save_pro(proj.pro_path, pro)
+
+        state.set_active_board(filename)
+        return {
+            "filename": filename,
+            "path": str(target),
+            "active": True,
+        }
+
+    @mcp.tool()
+    def list_boards() -> dict:
+        """List every `.kicad_pcb` in the project directory + which is active."""
+        proj = state.get_active()
+        files = sorted(p.name for p in proj.path.glob("*.kicad_pcb"))
+        active = state.get_active_board_filename()
+        # Active resolves to the main board if not explicitly set
+        main = proj.pcb_path.name
+        return {
+            "boards": files,
+            "main_board": main,
+            "active_board": active or main,
+        }
+
+    @mcp.tool()
+    def set_active_board(filename: str = "") -> dict:
+        """Switch the active PCB. Empty string returns to the project's main board.
+
+        Subsequent PCB tools (`add_footprint`, `add_track`, `run_drc`, etc.)
+        operate on the active board.
+        """
+        if not filename or filename.lower() == "main":
+            state.set_active_board(None)
+        else:
+            if not filename.endswith(".kicad_pcb"):
+                filename = f"{filename}.kicad_pcb"
+            state.set_active_board(filename)
+        active_path = state.get_active_board_path()
+        return {
+            "active_board": state.get_active_board_filename() or "main",
+            "path": str(active_path),
         }
 
     @mcp.tool()

@@ -52,11 +52,10 @@ def register(mcp) -> None:
         When omitted, KiCAD uses the project's plot settings.
         Defaults to `<project>/fab/gerbers/`.
         """
-        proj = state.get_active()
         out = Path(output_dir).expanduser() if output_dir else _fab_dir("gerbers")
         layer_list = [s.strip() for s in layers.split(",")] if layers else None
         return kicad_cli.export_gerbers(
-            proj.pcb_path, out, layers=layer_list, timeout=timeout_seconds
+            state.get_active_board_path(), out, layers=layer_list, timeout=timeout_seconds
         )
 
     @mcp.tool()
@@ -76,7 +75,7 @@ def register(mcp) -> None:
         proj = state.get_active()
         out = Path(output_dir).expanduser() if output_dir else _fab_dir("drill")
         return kicad_cli.export_drill(
-            proj.pcb_path, out,
+            state.get_active_board_path(), out,
             drill_format=format,
             generate_map=generate_map,
             map_format=map_format,
@@ -107,7 +106,7 @@ def register(mcp) -> None:
             ext = "csv" if format == "csv" else ("pos" if format == "ascii" else "gbr")
             out = _fab_dir() / f"{proj.name}-pos.{ext}"
         return kicad_cli.export_pos(
-            proj.pcb_path, out,
+            state.get_active_board_path(), out,
             side=side, fmt=format, units=units,
             smd_only=smd_only, exclude_dnp=exclude_dnp,
             timeout=timeout_seconds,
@@ -189,9 +188,48 @@ def register(mcp) -> None:
             else _fab_dir() / f"{proj.name}-render-{side}.png"
         )
         return kicad_cli.render_pcb(
-            proj.pcb_path, out,
+            state.get_active_board_path(), out,
             side=side, width=width, height=height,
             quality=quality, rotate=rotate, perspective=perspective,
+            timeout=timeout_seconds,
+        )
+
+    @mcp.tool()
+    def export_step_3d(
+        output_path: str | None = None,
+        include_components: bool = True,
+        include_tracks: bool = False,
+        include_zones: bool = False,
+        include_silkscreen: bool = False,
+        include_soldermask: bool = False,
+        no_dnp: bool = False,
+        component_filter: str | None = None,
+        timeout_seconds: float = 240.0,
+    ) -> dict:
+        """Export the PCB as a STEP 3D file (for Fusion 360 / SolidWorks / FreeCAD).
+
+        Default: board body + 3D component models. Toggle include_tracks,
+        include_zones, include_silkscreen, include_soldermask to add copper
+        and graphical layers to the STEP.
+
+        `component_filter` accepts wildcards (e.g. "U*,R1,R2").
+        Big boards with everything included can take several minutes.
+        """
+        proj = state.get_active()
+        out = (
+            Path(output_path).expanduser()
+            if output_path
+            else _fab_dir() / f"{proj.name}.step"
+        )
+        return kicad_cli.export_step(
+            state.get_active_board_path(), out,
+            include_components=include_components,
+            include_tracks=include_tracks,
+            include_zones=include_zones,
+            include_silkscreen=include_silkscreen,
+            include_soldermask=include_soldermask,
+            no_dnp=no_dnp,
+            component_filter=component_filter,
             timeout=timeout_seconds,
         )
 
@@ -212,7 +250,7 @@ def register(mcp) -> None:
         out = Path(output_dir).expanduser() if output_dir else _fab_dir("svg")
         layer_list = [s.strip() for s in layers.split(",")] if layers else None
         return kicad_cli.export_pcb_svg(
-            proj.pcb_path, out,
+            state.get_active_board_path(), out,
             layers=layer_list,
             fit_page_to_board=fit_page_to_board,
             black_and_white=black_and_white,
@@ -241,18 +279,18 @@ def register(mcp) -> None:
 
         # Gerbers
         results["steps"]["gerbers"] = kicad_cli.export_gerbers(
-            proj.pcb_path, base / "gerbers", timeout=timeout_seconds,
+            state.get_active_board_path(), base / "gerbers", timeout=timeout_seconds,
         )
         # Drill
         results["steps"]["drill"] = kicad_cli.export_drill(
-            proj.pcb_path, base / "drill",
+            state.get_active_board_path(), base / "drill",
             generate_map=True, excellon_separate_th=True,
             timeout=timeout_seconds,
         )
         # Position file
         try:
             results["steps"]["pos"] = kicad_cli.export_pos(
-                proj.pcb_path, base / f"{proj.name}-pos.csv",
+                state.get_active_board_path(), base / f"{proj.name}-pos.csv",
                 side="both", fmt="csv", units="mm",
                 timeout=timeout_seconds,
             )
@@ -270,7 +308,7 @@ def register(mcp) -> None:
         if include_render:
             try:
                 results["steps"]["render"] = kicad_cli.render_pcb(
-                    proj.pcb_path, base / f"{proj.name}-top.png",
+                    state.get_active_board_path(), base / f"{proj.name}-top.png",
                     side="top", timeout=timeout_seconds,
                 )
             except kicad_cli.KicadCliError as e:
@@ -278,7 +316,7 @@ def register(mcp) -> None:
         if include_svg:
             try:
                 results["steps"]["svg"] = kicad_cli.export_pcb_svg(
-                    proj.pcb_path, base / "svg",
+                    state.get_active_board_path(), base / "svg",
                     fit_page_to_board=True,
                     timeout=timeout_seconds,
                 )
