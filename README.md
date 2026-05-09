@@ -8,8 +8,8 @@ Full implementation spec: [`kicad-claude-mcp-spec.md`](./kicad-claude-mcp-spec.m
 
 ## Status
 
-**Phases 0–14 complete.** 99 MCP tools registered. 190 fast tests +
-30 acceptance tests pass.
+**Phases 0–15 complete.** 105 MCP tools registered. 208 fast tests +
+32 acceptance tests pass.
 
 | Phase | What it adds | Tools |
 |------|--------------|-------|
@@ -28,6 +28,7 @@ Full implementation spec: [`kicad-claude-mcp-spec.md`](./kicad-claude-mcp-spec.m
 | 12 | Diff pairs, length tuning (meander), schematic buses | `list_diff_pair_candidates`, `add_diff_pair_class`, `list_nets`, `compute_trace_length`, `validate_diff_pair_length_match`, `add_meander`, `add_bus`, `add_bus_entry`, `add_bus_alias` |
 | 13 | STEP 3D, custom DRC rules, multi-board, symbol/footprint creation | `export_step_3d`, `add_drc_rule`, `list_drc_rules`, `remove_drc_rule`, `clear_drc_rules`, `add_board`, `list_boards`, `set_active_board`, `create_symbol`, `create_footprint` |
 | 14 | Signal integrity (impedance), thermal (IPC-2152), RF, EMC heuristics | `calculate_microstrip_impedance`, `calculate_stripline_impedance`, `calculate_differential_impedance`, `calculate_coplanar_waveguide_impedance`, `solve_trace_width_for_impedance`, `list_impedance_targets`, `calculate_trace_current_capacity`, `solve_trace_width_for_current`, `analyze_pcb_current_capacity`, `add_via_array`, `add_ground_stitching`, `add_rf_microstrip`, `analyze_ground_coverage`, `find_long_traces`, `validate_decoupling_caps` |
+| 15 | Panelization, SPICE wrapper, thermal network, crosstalk, return path | `panelize_board_grid`, `export_spice_netlist`, `run_ngspice_simulation`, `simulate_thermal_steady_state`, `estimate_crosstalk`, `check_return_path_continuity` |
 
 Phase-by-phase notes and the technical decisions that diverge from the spec
 live in [`docs/PROGRESS.md`](./docs/PROGRESS.md).

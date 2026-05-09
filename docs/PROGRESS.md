@@ -17,6 +17,7 @@
 | 12 | Diff pairs + length tuning (meander) + buses de comunicación | ✅ completada |
 | 13 | STEP 3D + custom DRC rules + multi-board + symbol/footprint editor | ✅ completada |
 | 14 | Signal integrity (impedance) + thermal (IPC-2152) + RF + EMC heuristics | ✅ completada |
+| 15 | Panelización + SPICE + thermal network + crosstalk + return path | ✅ completada |
 
 ## Fase 0 — checklist
 
@@ -367,9 +368,49 @@ sustituida en `.env`, `check_availability` devolverá ambos lados.
 - **`validate_decoupling_caps` es geométrica**, no eléctrica. No verifica que el cap esté cableado a VCC/GND del IC; solo cercanía. Útil como starting-point review.
 - **`add_via_array` admite offset perpendicular** para que `add_ground_stitching` (que llama 2 veces) genere fences en ambos lados con un solo helper.
 
+## Fase 15 — checklist
+
+### Panelización
+- [x] `adapters/panelization.py`: duplica footprints/segments/vias/zones/gr_* con offset
+- [x] **Refresh de UUIDs** recursivo para evitar duplicados
+- [x] **Suffix de Reference** `_R{r}C{c}` por celda (única en panel)
+- [x] **Mouse bites** = gr_circle en Edge.Cuts entre celdas (KiCAD las trata como cutouts)
+- [x] **Strip de filled_polygon** en zones (recomputable con `--refill-zones`)
+- [x] `tool panelize_board_grid` con auto-registro en `.kicad_pro` boards + opción de switch_to_panel
+- [x] **Acceptance**: 2×3 panel de board 30×20 → kicad-cli pcb drc returncode 0
+
+### SPICE
+- [x] `tool export_spice_netlist`: wrap de `kicad-cli sch export netlist --format spice`
+- [x] `tool run_ngspice_simulation`: shell out a `ngspice -b` con composer del .cir + analysis directive (`.op`/`.dc`/`.ac`/`.tran`/`.noise`)
+- [x] Auto-detect de ngspice; error claro con instrucciones de install si falta
+- [x] Captura stdout/stderr para análisis post-mortem
+
+### Thermal FEM (closed-form, no FEA real)
+- [x] `tool simulate_thermal_steady_state`: red resistive lumped (Rjc + Rca → Tj = T_amb + P × Rtotal)
+- [x] Sort por Tj descendente (hottest first) + warnings 85°C / 105°C (commercial grade)
+
+### EMC FEM (closed-form)
+- [x] `tool estimate_crosstalk`: NEXT/FEXT para microstrips paralelos
+  - K_coupling = 1/(1+(s/h)²), NEXT ≈ K/4·(1−exp(−Td/τr)), FEXT ≈ K·Td/τr
+  - Output en ratio + dB + warning si NEXT > 5%
+- [x] `tool check_return_path_continuity`: ray-cast point-in-polygon de cada track sample contra GND zones de capa diferente. Flag <80% coverage.
+
+### Verificación
+- [x] 18 unit tests + 2 acceptance tests con kicad-cli
+- [x] **Smoke E2E**: panel 2×3 → DRC clean, thermal U1 2.5W → 153°C (correctly flagged), crosstalk NEXT -34dB / FEXT -22dB, SPICE netlist exportado.
+
+## Decisiones técnicas (Fase 15)
+
+- **Panelización native vs KiKit**: implementé native (sexpdata + refresh UUIDs + suffixing) en vez de wrappear KiKit. Trade-off: menos features (no V-cuts, no fiducials de panel, no breakaway tabs sofisticados); pero zero deps externas y flujo MCP-nativo. KiKit sigue siendo opción si el usuario lo necesita.
+- **SPICE batch via ngspice -b**: la opción interactiva de ngspice no funciona bajo subprocess; -b ejecuta el .cir y sale, output via stdout. El composer añade `.print all` después del análisis para forzar emisión de datos.
+- **Thermal lumped (no FEA)**: Rjc + Rca son las resistencias térmicas estándar de los datasheets (junction-to-case + case-to-ambient). Sin coupling entre componentes — para PCB-spreader analysis, el usuario lump esa contribución en Rca. Aproximación de 1er orden, suficiente para early design.
+- **Crosstalk closed-form ~20% error**: aceptable para early-stage layout. Real EM solver (Sonnet, Ansys HFSS) para validación final.
+- **Return path heurístico**: ray-cast point-in-polygon en 11 samples por trace. Detecta gaps obvios (signal cruzando un void en la GND plane). NO detecta splits sutiles ni stub stubs return paths.
+- **Panel deja zonas sin filled_polygon**: KiCAD las recomputa con `--refill-zones`. Strip explícito porque la cache filled de la fuente está geometricamente desplazada en cada celda.
+
 ## Resumen del proyecto
 
-**99 tools MCP** registrados. **190 tests rápidos + 30 acceptance**. 15 commits limpios.
+**105 tools MCP** registrados. **208 tests rápidos + 32 acceptance**. 16 commits limpios.
 
 ## Notas
 

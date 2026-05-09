@@ -24,6 +24,8 @@ Phases enabled here so far:
    13 — STEP 3D + custom DRC rules + multi-board + symbol/footprint editor
    14 — signal integrity (impedance) + thermal (IPC-2152) + RF (CPW, stitching) +
         EMC heuristics
+   15 — panelization (rows × cols + mouse bites) + SPICE (ngspice wrapper) +
+        thermal network + crosstalk + return-path continuity (closed-form FEM)
 
 Future phases register additional tool groups via the same `register(mcp)`
 pattern.
@@ -43,6 +45,7 @@ from kicad_claude.tools.emc import register as register_emc_tools  # noqa: E402
 from kicad_claude.tools.library import register as register_library_tools  # noqa: E402
 from kicad_claude.tools.library_create import register as register_library_create_tools  # noqa: E402
 from kicad_claude.tools.manufacturing import register as register_manufacturing_tools  # noqa: E402
+from kicad_claude.tools.panelization import register as register_panelization_tools  # noqa: E402
 from kicad_claude.tools.pcb import register as register_pcb_tools  # noqa: E402
 from kicad_claude.tools.project import register as register_project_tools  # noqa: E402
 from kicad_claude.tools.rf import register as register_rf_tools  # noqa: E402
@@ -50,7 +53,9 @@ from kicad_claude.tools.routing import register as register_routing_tools  # noq
 from kicad_claude.tools.rules import register as register_rules_tools  # noqa: E402
 from kicad_claude.tools.schematic import register as register_schematic_tools  # noqa: E402
 from kicad_claude.tools.signal_integrity import register as register_signal_integrity_tools  # noqa: E402
+from kicad_claude.tools.simulation import register as register_simulation_tools  # noqa: E402
 from kicad_claude.tools.sourcing import register as register_sourcing_tools  # noqa: E402
+from kicad_claude.tools.spice import register as register_spice_tools  # noqa: E402
 from kicad_claude.tools.sync import register as register_sync_tools  # noqa: E402
 from kicad_claude.tools.thermal import register as register_thermal_tools  # noqa: E402
 from kicad_claude.tools.validation import register as register_validation_tools  # noqa: E402
@@ -83,6 +88,9 @@ register_signal_integrity_tools(mcp)
 register_thermal_tools(mcp)
 register_rf_tools(mcp)
 register_emc_tools(mcp)
+register_panelization_tools(mcp)
+register_spice_tools(mcp)
+register_simulation_tools(mcp)
 
 
 if __name__ == "__main__":
