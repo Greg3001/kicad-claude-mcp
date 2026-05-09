@@ -7,7 +7,7 @@
 | 2 | Indexador de librerías | ✅ completada |
 | 3 | Edición del esquema | ✅ completada |
 | 4 | Sourcing externo (DigiKey/Mouser/SnapEDA) | ✅ completada (Mouser pendiente de Search API key correcta) |
-| 5 | Edición del PCB | ⬜ pendiente |
+| 5 | Edición del PCB | ✅ completada |
 | 6 | Autorouting con Freerouting | ⬜ pendiente |
 | 7 | Validación (ERC/DRC) | ⬜ pendiente |
 
@@ -87,6 +87,25 @@ separadas por cuenta**: una para Search API (`/search/*`) y otra para Order
 API (`/order/*`). La que funciona aquí es la de **Search**. Verificar en
 https://www.mouser.com/api-hub/ → My Account → "Search API" key. Una vez
 sustituida en `.env`, `check_availability` devolverá ambos lados.
+
+## Fase 5 — checklist
+
+- [x] `adapters/pcb_editor.py`: parse/save (reusa `sch_io`), iter_footprints, find_footprint_by_reference
+- [x] `set_board_outline(width, height, shape='rect')` con `gr_rect` en Edge.Cuts. Idempotente (limpia outline previo).
+- [x] `add_footprint(lib_id, ref, value, x, y, rotation, layer)` — clona def del `.kicad_mod`, le pone uuid/at/layer/properties. **Extiende el spec**: el spec asume "Update PCB from Schematic" en GUI; este tool permite poblar PCBs sin GUI (necesario para tests automáticos).
+- [x] `move_footprint`, `remove_footprint`, `list_footprints_summary`
+- [x] `place_footprints_grid` detecta footprints en KiCAD-(0,0) (estado tras "Update PCB from Schematic") y los reparte en rejilla. Sort por reference.
+- [x] `add_track` (segment) y `add_via`
+- [x] `tools/pcb.py`: 7 tools FastMCP
+- [x] Tests: 13 unit + 1 acceptance. **72 pasan en total**.
+- [x] **Acceptance**: tablero 50×30 mm + 2× R_0603 SMD + 1 track → `kicad-cli pcb drc` returncode 0.
+
+## Decisiones técnicas (Fase 5)
+
+- **Coords MCP Y+ arriba (mismo convenio que Fase 3).** Page height = 210 (A4 landscape) para el flip Y. La placa por defecto se ancla con esquina inferior-izquierda en MCP (10, 10).
+- **`add_footprint` añadido fuera de spec.** Sin él no podríamos popular PCBs en tests sin GUI. Se mantiene compatible con el flujo del spec: si el usuario hace "Update PCB from Schematic" en KiCAD, los footprints aparecen y `place_footprints_grid` los puede ordenar.
+- **`gr_rect` para outline rectangular.** La spec dice 'rect' o 'rounded_rect'; rounded_rect requiere 4 lines + 4 arcs y se aplazó (no bloquea el flujo).
+- **Layer validation strict.** `add_footprint` y `move_footprint` solo aceptan `F.Cu` o `B.Cu`. Tracks aceptan cualquier capa cobre.
 
 ## Notas
 

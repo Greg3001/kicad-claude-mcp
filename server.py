@@ -10,6 +10,8 @@ Phases enabled here so far:
         add_label, add_power_symbol, add_no_connect, list_pins, get_pin_position)
     4 — sourcing (check_availability, find_or_fetch_symbol, import_vendor_zip,
         list_vendor_parts)
+    5 — PCB editing (set_board_outline, list_footprints, add_footprint,
+        move_footprint, place_footprints_grid, add_track, add_via)
 
 Future phases register additional tool groups via the same `register(mcp)`
 pattern.
@@ -26,6 +28,7 @@ from mcp.server.fastmcp import FastMCP
 load_dotenv(Path(__file__).parent / ".env")
 
 from kicad_claude.tools.library import register as register_library_tools  # noqa: E402
+from kicad_claude.tools.pcb import register as register_pcb_tools  # noqa: E402
 from kicad_claude.tools.project import register as register_project_tools  # noqa: E402
 from kicad_claude.tools.schematic import register as register_schematic_tools  # noqa: E402
 from kicad_claude.tools.sourcing import register as register_sourcing_tools  # noqa: E402
@@ -47,6 +50,7 @@ register_project_tools(mcp)
 register_library_tools(mcp)
 register_schematic_tools(mcp)
 register_sourcing_tools(mcp)
+register_pcb_tools(mcp)
 
 
 if __name__ == "__main__":
