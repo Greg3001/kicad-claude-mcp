@@ -1,14 +1,20 @@
 """KiCAD-Claude MCP server entry point.
 
-Phase 0 — Bootstrap. Only the `ping` tool is wired up. Real KiCAD tools land
-in subsequent phases (see kicad-claude-mcp-spec.md §5).
+Phases enabled here so far:
+    0 — ping (health check)
+    1 — project management (create_project, set_project, get_project_state,
+        list_components)
+
+Future phases register additional tool groups via the same `register(mcp)`
+pattern.
 """
 
 from __future__ import annotations
 
 from mcp.server.fastmcp import FastMCP
 
-from src.kicad_claude.utils.logging import setup_logging
+from kicad_claude.tools.project import register as register_project_tools
+from kicad_claude.utils.logging import setup_logging
 
 logger = setup_logging()
 
@@ -20,6 +26,9 @@ def ping() -> str:
     """Health check. Returns 'pong' if the server is reachable."""
     logger.info("ping called")
     return "pong"
+
+
+register_project_tools(mcp)
 
 
 if __name__ == "__main__":
