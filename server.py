@@ -8,6 +8,8 @@ Phases enabled here so far:
         search_footprint, get_symbol_details)
     3 — schematic editing (add_symbol, remove_symbol, move_symbol, add_wire,
         add_label, add_power_symbol, add_no_connect, list_pins, get_pin_position)
+    4 — sourcing (check_availability, find_or_fetch_symbol, import_vendor_zip,
+        list_vendor_parts)
 
 Future phases register additional tool groups via the same `register(mcp)`
 pattern.
@@ -15,12 +17,19 @@ pattern.
 
 from __future__ import annotations
 
+from pathlib import Path
+
+from dotenv import load_dotenv
 from mcp.server.fastmcp import FastMCP
 
-from kicad_claude.tools.library import register as register_library_tools
-from kicad_claude.tools.project import register as register_project_tools
-from kicad_claude.tools.schematic import register as register_schematic_tools
-from kicad_claude.utils.logging import setup_logging
+# Load .env early so adapters can read API credentials at import/use time.
+load_dotenv(Path(__file__).parent / ".env")
+
+from kicad_claude.tools.library import register as register_library_tools  # noqa: E402
+from kicad_claude.tools.project import register as register_project_tools  # noqa: E402
+from kicad_claude.tools.schematic import register as register_schematic_tools  # noqa: E402
+from kicad_claude.tools.sourcing import register as register_sourcing_tools  # noqa: E402
+from kicad_claude.utils.logging import setup_logging  # noqa: E402
 
 logger = setup_logging()
 
@@ -37,6 +46,7 @@ def ping() -> str:
 register_project_tools(mcp)
 register_library_tools(mcp)
 register_schematic_tools(mcp)
+register_sourcing_tools(mcp)
 
 
 if __name__ == "__main__":

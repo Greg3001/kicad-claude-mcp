@@ -33,4 +33,5 @@ packages = ["src/kicad_claude"]
 testpaths = ["tests"]
 markers = [
     "slow: tests that invoke kicad-cli or Freerouting (deselect with -m \"not slow\")",
+    "network: tests that hit external APIs (DigiKey, Mouser, SnapEDA)",
 ]

@@ -6,7 +6,7 @@
 | 1 | Gestión de proyecto KiCAD | ✅ completada |
 | 2 | Indexador de librerías | ✅ completada |
 | 3 | Edición del esquema | ✅ completada |
-| 4 | Sourcing externo (DigiKey/Mouser/SnapEDA) | ⬜ pendiente |
+| 4 | Sourcing externo (DigiKey/Mouser/SnapEDA) | ✅ completada (Mouser pendiente de Search API key correcta) |
 | 5 | Edición del PCB | ⬜ pendiente |
 | 6 | Autorouting con Freerouting | ⬜ pendiente |
 | 7 | Validación (ERC/DRC) | ⬜ pendiente |
@@ -67,6 +67,26 @@
 - **Pin position math**: lib coords (Y down) rotadas por símbolo's rotation, luego desplazadas al símbolo origin, luego flip Y para MCP. Verificado con simetría (pin1 + pin2 = 2*center_y).
 - **Backups**: cada escritura crea `<project>/.backups/<timestamp>_<filename>`.
 - **`extends`**: el parser del indexador resuelve pin_count, pero `add_symbol` aún no inyecta la base extendida en lib_symbols. Símbolos como `Device:R_Small` (que extends `R`) pueden no renderizar bien hasta que esto se aborde. Pendiente para iteración.
+
+## Fase 4 — checklist
+
+- [x] `.env` cargado al arranque del server (`load_dotenv` antes de los registros)
+- [x] `adapters/digikey.py`: V4 API. OAuth2 client_credentials, token cacheado en `~/.cache/kicad-claude/digikey_token.json` con expiry. Localización configurable (default ES/EUR).
+- [x] `adapters/mouser.py`: V2 API, `apiKey` por query string. Maneja errores en payload (200 + Errors[]).
+- [x] `adapters/snapeda.py`: helpers de URL + mensaje de fallback manual. Sin scraping (login required).
+- [x] `adapters/vendor_import.py`: extrae ZIP, fusiona `.kicad_sym` (idempotente por nombre) y `.pretty/`, actualiza `sym-lib-table` y `fp-lib-table` (idempotente por lib name).
+- [x] `tools/sourcing.py`: 4 tools (`check_availability`, `find_or_fetch_symbol`, `import_vendor_zip`, `list_vendor_parts`).
+- [x] Tests: 13 unit + 2 network. Live DigiKey contra LM358N OK (29.540 stock, 0,87€).
+- [x] `find_or_fetch_symbol` enriquece con manufacturer desde DigiKey si no hay match local.
+- [x] `import_vendor_zip` rechaza `target_lib` no-alphanum (evita corrupción de lib-table).
+
+### Mouser — atención
+
+La API key actual devuelve `Invalid API Key`. Mouser entrega **dos claves
+separadas por cuenta**: una para Search API (`/search/*`) y otra para Order
+API (`/order/*`). La que funciona aquí es la de **Search**. Verificar en
+https://www.mouser.com/api-hub/ → My Account → "Search API" key. Una vez
+sustituida en `.env`, `check_availability` devolverá ambos lados.
 
 ## Notas
 
