@@ -5,7 +5,7 @@
 | 0 | Bootstrap (estructura, deps, ping tool) | ✅ completada (pendiente verificación end-to-end con Claude Code) |
 | 1 | Gestión de proyecto KiCAD | ✅ completada |
 | 2 | Indexador de librerías | ✅ completada |
-| 3 | Edición del esquema | ⬜ pendiente |
+| 3 | Edición del esquema | ✅ completada |
 | 4 | Sourcing externo (DigiKey/Mouser/SnapEDA) | ⬜ pendiente |
 | 5 | Edición del PCB | ⬜ pendiente |
 | 6 | Autorouting con Freerouting | ⬜ pendiente |
@@ -48,6 +48,25 @@
 - [x] Cache JSON en `~/.cache/kicad-claude/index.json`
 - [x] Tests: 29 rápidos + 1 lento (real KiCAD install). Todos pasan.
 - [x] Acceptance criteria sobre KiCAD 10.0.1: **222** libs / **22,728** símbolos, **155** libs / **15,430** footprints, ESP32-S3-WROOM-1 → 41 pins (idéntico al spec).
+
+## Fase 3 — checklist
+
+- [x] `utils/geometry.py`: `mcp_to_kicad_xy` (Y-flip), `normalize_rotation` (0/90/180/270 only), `rotate_xy`, `round_mm`
+- [x] `adapters/sch_io.py`: parse + pretty-print s-expr al estilo KiCAD (round-trip de Arduino_Mega.kicad_sch verificado, kicad-cli returncode 0)
+- [x] `adapters/sch_editor.py`: backups en `.backups/`, lib_symbols injection idempotente, instancia con UUID, project path, propiedades, pin uuids
+- [x] `tools/schematic.py`: 9 tools (add_symbol, remove_symbol, move_symbol, add_wire, add_label, add_power_symbol, add_no_connect, list_pins, get_pin_position)
+- [x] Auto-numerado `#PWR####` para `add_power_symbol`
+- [x] Tests: 17 rápidos + 1 de aceptación. Total 46 rápidos en todo el proyecto.
+- [x] **Acceptance**: divisor de tensión (R1=10k, R2=1k entre +5V y GND, 3 wires) → `kicad-cli sch erc` returncode 0.
+
+## Decisiones técnicas
+
+- **Y axis**: MCP API Y+ arriba, archivo KiCAD Y+ abajo. Conversión en `geometry.mcp_to_kicad_xy`. Page height A4 landscape = 210mm.
+- **Sin `kicad-skip` para escribir**: en su lugar, parse con `sexpdata` + pretty-printer custom (`sch_io.dumps`). KiCAD acepta nuestra salida (returncode 0 en erc/drc). kicad-skip queda para reads donde es conveniente (Phase 1's list_components).
+- **lib_symbols injection**: idempotente por lib_id. Cada `add_symbol` que use un nuevo `lib_id` añade su definición completa al bloque `(lib_symbols ...)`. Reusos no duplican.
+- **Pin position math**: lib coords (Y down) rotadas por símbolo's rotation, luego desplazadas al símbolo origin, luego flip Y para MCP. Verificado con simetría (pin1 + pin2 = 2*center_y).
+- **Backups**: cada escritura crea `<project>/.backups/<timestamp>_<filename>`.
+- **`extends`**: el parser del indexador resuelve pin_count, pero `add_symbol` aún no inyecta la base extendida en lib_symbols. Símbolos como `Device:R_Small` (que extends `R`) pueden no renderizar bien hasta que esto se aborde. Pendiente para iteración.
 
 ## Notas
 

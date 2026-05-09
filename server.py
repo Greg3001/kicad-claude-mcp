@@ -6,6 +6,8 @@ Phases enabled here so far:
         list_components)
     2 — library indexing (index_libraries, list_libraries, search_symbol,
         search_footprint, get_symbol_details)
+    3 — schematic editing (add_symbol, remove_symbol, move_symbol, add_wire,
+        add_label, add_power_symbol, add_no_connect, list_pins, get_pin_position)
 
 Future phases register additional tool groups via the same `register(mcp)`
 pattern.
@@ -17,6 +19,7 @@ from mcp.server.fastmcp import FastMCP
 
 from kicad_claude.tools.library import register as register_library_tools
 from kicad_claude.tools.project import register as register_project_tools
+from kicad_claude.tools.schematic import register as register_schematic_tools
 from kicad_claude.utils.logging import setup_logging
 
 logger = setup_logging()
@@ -33,6 +36,7 @@ def ping() -> str:
 
 register_project_tools(mcp)
 register_library_tools(mcp)
+register_schematic_tools(mcp)
 
 
 if __name__ == "__main__":
