@@ -239,8 +239,10 @@ def test_build_symbol_node_includes_pins(tmp_path: Path):
         body_width_mm=4, body_height_mm=8,
         reference_prefix="U", value="TEST",
     )
-    # name is at index 1
-    assert node[1] == "vendor:TEST"
+    # In a .kicad_sym source file the symbol name is BARE (not Lib:Name).
+    # KiCAD adds the qualifier when the symbol is copied into a schematic's
+    # lib_symbols block, not in the source library.
+    assert node[1] == "TEST"
     # Sub-symbol with pins
     sub = sch_io.find_child(node, "symbol")
     assert sub is not None
@@ -268,7 +270,8 @@ def test_create_symbol_writes_lib_and_table(tmp_path: Path):
     data = sexpdata.loads(lib_path.read_text())
     assert str(data[0]) == "kicad_symbol_lib"
     syms = [c for c in data if isinstance(c, list) and len(c) >= 2 and isinstance(c[0], sexpdata.Symbol) and str(c[0]) == "symbol"]
-    assert any(s[1] == "custom:WIDGET" for s in syms)
+    # Bare name in source lib (the indexer prepends "custom:" automatically)
+    assert any(s[1] == "WIDGET" for s in syms)
     # sym-lib-table registered
     sym_table = (tmp_path / "p" / "sym-lib-table").read_text()
     assert "custom" in sym_table

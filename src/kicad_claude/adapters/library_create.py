@@ -114,7 +114,13 @@ def build_symbol_node(
     half_w = body_width_mm / 2
     half_h = body_height_mm / 2
 
-    sub_sym_name = qualified_lib_id.split(":", 1)[-1] + "_0_1"
+    # In a .kicad_sym source file the top-level (symbol "...") is the BARE
+    # name (e.g. "S32K358"), not "Lib:S32K358". The qualifier is only used
+    # when the symbol is copied into a schematic's lib_symbols block. Mixing
+    # them up makes the indexer construct lib_ids like "haps_vendor:haps_vendor:S32K358"
+    # since it prepends the lib filename's stem.
+    bare_name = qualified_lib_id.split(":", 1)[-1] if ":" in qualified_lib_id else qualified_lib_id
+    sub_sym_name = bare_name + "_0_1"
 
     body_rect = [
         sym("rectangle"),
@@ -140,7 +146,7 @@ def build_symbol_node(
     sub_symbol = [sym("symbol"), sub_sym_name, body_rect, *pin_nodes]
 
     symbol: list[Any] = [
-        sym("symbol"), qualified_lib_id,
+        sym("symbol"), bare_name,
         [sym("pin_numbers"), [sym("hide"), sym("no")]],
         [sym("pin_names"), [sym("offset"), 1.016]],
         [sym("exclude_from_sim"), sym("no")],
@@ -164,7 +170,7 @@ def append_symbol_to_lib(lib_path: Path, symbol_node: list) -> None:
     Refuses to add if a symbol with the same qualified name already exists
     (the caller should remove it first).
     """
-    qualified = symbol_node[1] if len(symbol_node) >= 2 else None
+    bare = symbol_node[1] if len(symbol_node) >= 2 else None
     lib_path = Path(lib_path)
     lib_path.parent.mkdir(parents=True, exist_ok=True)
 
@@ -184,10 +190,10 @@ def append_symbol_to_lib(lib_path: Path, symbol_node: list) -> None:
         if (
             is_call(child, "symbol")
             and len(child) >= 2
-            and child[1] == qualified
+            and child[1] == bare
         ):
             raise FileExistsError(
-                f"symbol {qualified!r} already exists in {lib_path}; "
+                f"symbol {bare!r} already exists in {lib_path}; "
                 "remove it manually or import via a different name."
             )
     tree.append(symbol_node)
