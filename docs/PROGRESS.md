@@ -8,7 +8,7 @@
 | 3 | Edición del esquema | ✅ completada |
 | 4 | Sourcing externo (DigiKey/Mouser/SnapEDA) | ✅ completada (Mouser pendiente de Search API key correcta) |
 | 5 | Edición del PCB | ✅ completada |
-| 6 | Autorouting con Freerouting | ⬜ pendiente |
+| 6 | Autorouting con Freerouting | ✅ completada |
 | 7 | Validación (ERC/DRC) | ⬜ pendiente |
 
 ## Fase 0 — checklist
@@ -106,6 +106,24 @@ sustituida en `.env`, `check_availability` devolverá ambos lados.
 - **`add_footprint` añadido fuera de spec.** Sin él no podríamos popular PCBs en tests sin GUI. Se mantiene compatible con el flujo del spec: si el usuario hace "Update PCB from Schematic" en KiCAD, los footprints aparecen y `place_footprints_grid` los puede ordenar.
 - **`gr_rect` para outline rectangular.** La spec dice 'rect' o 'rounded_rect'; rounded_rect requiere 4 lines + 4 arcs y se aplazó (no bloquea el flujo).
 - **Layer validation strict.** `add_footprint` y `move_footprint` solo aceptan `F.Cu` o `B.Cu`. Tracks aceptan cualquier capa cobre.
+
+## Fase 6 — checklist
+
+- [x] Freerouting 2.1.0 descargado a `third_party/freerouting.jar` (66 MB; gitignored)
+- [x] `adapters/kicad_python.py`: localiza el Python 3.9 que trae KiCAD y ejecuta scripts con `pcbnew.ExportSpecctraDSN` / `ImportSpecctraSES`
+- [x] `adapters/freerouting.py`: lanza el JAR vía subprocess con timeout duro; parsea logs (vias, longitud, % completion, duración)
+- [x] `tools/routing.py`: 3 tools (`autoroute_pcb`, `export_dsn`, `import_ses`)
+- [x] Backup del `.kicad_pcb` antes de importar SES
+- [x] Tests: 5 unit + 2 acceptance (slow). 77 pasan en total.
+- [x] **Acceptance**: pipeline completo en placa 50×30 + 2 R_0603 → DSN exportado, Freerouting OK (rc=0), SES importado, `.kicad_pcb` actualizado.
+
+## Decisiones técnicas (Fase 6)
+
+- **`kicad-cli` v10 NO expone Specctra**: el spec asumía `kicad-cli pcb export specctra-dsn` y `pcb import specctra-ses`, pero KiCAD 10 los retiró del CLI. **Workaround**: invocar `pcbnew.ExportSpecctraDSN` / `ImportSpecctraSES` desde el **Python 3.9 que KiCAD trae bundled**. La SWIG bindings sólo cargan en su propio intérprete (no en el `python` 3.10/3.13 nuestro).
+- **Freerouting 2.2.x requiere Java 25**, así que descargué la **2.1.0** (compatible con Java 21+). Java 24 OK.
+- **Path resolution para `freerouting.jar`**: 1) env `FREEROUTING_JAR`, 2) `<repo>/third_party/freerouting.jar`. Mismo patrón para `KICAD_PYTHON` y `JAVA_BIN`.
+- **Stats parsing best-effort**: regex sobre stdout/stderr de Freerouting. Para campos que avanzan (passes_done, completion_pct) tomamos el último match (estado final). Para totales (vias, longitud) el primero/único.
+- **Timeout duro** en `freerouting.route`: si supera `timeout_seconds` se aborta con error claro (sin esto Freerouting puede correr indefinidamente en boards patológicos).
 
 ## Notas
 

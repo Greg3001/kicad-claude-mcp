@@ -12,6 +12,7 @@ Phases enabled here so far:
         list_vendor_parts)
     5 — PCB editing (set_board_outline, list_footprints, add_footprint,
         move_footprint, place_footprints_grid, add_track, add_via)
+    6 — autorouting (autoroute_pcb, export_dsn, import_ses) via Freerouting
 
 Future phases register additional tool groups via the same `register(mcp)`
 pattern.
@@ -30,6 +31,7 @@ load_dotenv(Path(__file__).parent / ".env")
 from kicad_claude.tools.library import register as register_library_tools  # noqa: E402
 from kicad_claude.tools.pcb import register as register_pcb_tools  # noqa: E402
 from kicad_claude.tools.project import register as register_project_tools  # noqa: E402
+from kicad_claude.tools.routing import register as register_routing_tools  # noqa: E402
 from kicad_claude.tools.schematic import register as register_schematic_tools  # noqa: E402
 from kicad_claude.tools.sourcing import register as register_sourcing_tools  # noqa: E402
 from kicad_claude.utils.logging import setup_logging  # noqa: E402
@@ -51,6 +53,7 @@ register_library_tools(mcp)
 register_schematic_tools(mcp)
 register_sourcing_tools(mcp)
 register_pcb_tools(mcp)
+register_routing_tools(mcp)
 
 
 if __name__ == "__main__":
