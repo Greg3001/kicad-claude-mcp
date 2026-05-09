@@ -1,0 +1,11 @@
+(footprint "Mini_R_0603"
+	(version 20240108)
+	(generator "test")
+	(layer "F.Cu")
+	(descr "Tiny test resistor footprint 0603")
+	(tags "resistor smd 0603")
+	(property "Reference" "REF**"
+		(at 0 -1.43 0)
+		(layer "F.SilkS")
+	)
+)
