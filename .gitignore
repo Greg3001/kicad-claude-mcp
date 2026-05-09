@@ -1,0 +1,48 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.egg-info/
+*.egg
+.eggs/
+build/
+dist/
+
+# Virtual environments
+.venv/
+venv/
+env/
+
+# uv
+.python-version
+# uv.lock IS committed (application, not library)
+
+# Secrets / env
+.env
+.env.local
+
+# Project artifacts
+third_party/freerouting.jar
+third_party/*.jar
+.cache/
+.backups/
+
+# Tests
+.pytest_cache/
+.coverage
+htmlcov/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Local Claude Code skills config (not part of this project)
+.agents/
+skills-lock.json
+
