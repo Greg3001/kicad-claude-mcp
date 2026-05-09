@@ -24,7 +24,10 @@ from typing import Any
 
 import sexpdata
 
-from kicad_claude.adapters import pcb_layers, sch_io
+import math
+import re
+
+from kicad_claude.adapters import length_tuning, pcb_layers, sch_io
 from kicad_claude.adapters.sch_io import (
     find_child,
     find_children,
@@ -496,6 +499,169 @@ def add_via(
     ]
     tree.append(node)
     return node
+
+
+# --------------------------------------------------------------------------- #
+# Net inspection / diff pairs / trace length
+# --------------------------------------------------------------------------- #
+
+
+def list_nets(tree: list) -> list[dict]:
+    """Return [{index, name}] for every (net N "name") declaration in the PCB."""
+    out: list[dict] = []
+    for n in find_children(tree, "net"):
+        if len(n) >= 3 and isinstance(n[1], int):
+            out.append({"index": int(n[1]), "name": str(n[2])})
+    return out
+
+
+def find_net_index(tree: list, net_name: str) -> int | None:
+    for n in find_children(tree, "net"):
+        if len(n) >= 3 and n[2] == net_name:
+            return int(n[1])
+    return None
+
+
+# Suffix conventions for diff pair members. Order matters: more-specific first.
+_DIFF_PATTERNS: list[tuple[str, str, str]] = [
+    # (positive_suffix, negative_suffix, conjunction explainer)
+    ("_P", "_N", "_P/_N"),
+    ("+", "-", "+/−"),
+    ("DP", "DM", "DP/DM (USB-style)"),
+    ("_p", "_n", "_p/_n (lowercase)"),
+]
+
+
+def find_diff_pair_candidates(tree: list) -> list[dict]:
+    """Detect pairs of nets that look like differential pairs by name.
+
+    Returns a list of dicts with `base_name`, `p`, `n`, and `convention`.
+    Skips nets that don't have a partner present.
+    """
+    names = {n["name"] for n in list_nets(tree) if n["name"]}
+    pairs: list[dict] = []
+    seen: set[tuple[str, str]] = set()
+
+    for name in sorted(names):
+        for p_suf, n_suf, label in _DIFF_PATTERNS:
+            if name.endswith(p_suf) and len(name) > len(p_suf):
+                base = name[: -len(p_suf)]
+                partner = base + n_suf
+                if partner in names:
+                    key = tuple(sorted((name, partner)))
+                    if key in seen:
+                        continue
+                    seen.add(key)
+                    # Strip trailing separator from the displayed base name
+                    # ("USB_DP" -> "USB", not "USB_").
+                    display_base = base.rstrip("_-.")
+                    pairs.append({
+                        "base_name": display_base,
+                        "p": name,
+                        "n": partner,
+                        "convention": label,
+                    })
+                    break  # only emit each net once
+    return pairs
+
+
+def compute_trace_length(tree: list, net_name: str) -> dict:
+    """Sum lengths of every (segment ...) on the named net.
+
+    Returns mm total plus per-layer breakdown. Multi-layer traces are
+    counted across all layers; vias add zero length.
+    """
+    idx = find_net_index(tree, net_name)
+    if idx is None:
+        raise KeyError(f"unknown net {net_name!r}")
+    total = 0.0
+    by_layer: dict[str, float] = {}
+    seg_count = 0
+    for seg in find_children(tree, "segment"):
+        net = find_child(seg, "net")
+        if not net or int(net[1]) != idx:
+            continue
+        start = find_child(seg, "start")
+        end = find_child(seg, "end")
+        if not (start and end and len(start) >= 3 and len(end) >= 3):
+            continue
+        seg_len = math.hypot(
+            float(end[1]) - float(start[1]),
+            float(end[2]) - float(start[2]),
+        )
+        total += seg_len
+        layer_node = find_child(seg, "layer")
+        layer_name = layer_node[1] if layer_node and len(layer_node) >= 2 else ""
+        by_layer[layer_name] = by_layer.get(layer_name, 0.0) + seg_len
+        seg_count += 1
+    return {
+        "net": net_name,
+        "total_mm": round_mm(total),
+        "segment_count": seg_count,
+        "by_layer_mm": {k: round_mm(v) for k, v in by_layer.items()},
+    }
+
+
+def add_meander_segments(
+    tree: list,
+    *,
+    start_mm: tuple[float, float],
+    end_mm: tuple[float, float],
+    target_length_mm: float,
+    amplitude_mm: float = 1.5,
+    side: str = "up",
+    width_mm: float = 0.25,
+    layer: str = "F.Cu",
+    net_name: str | None = None,
+    base_width_mm: float | None = None,
+) -> list[list]:
+    """Generate a meander between two points and emit (segment ...) nodes.
+
+    `side`: "up" / "down" (perpendicular direction). `net_name` resolves to
+    the net index; pass None for net 0 (default unconnected). Returns the
+    list of new segment nodes appended to the tree.
+    """
+    side_map = {"up": 1, "down": -1, "left": 1, "right": -1}
+    if side not in side_map:
+        raise ValueError(f"side must be 'up' or 'down' (got {side!r})")
+
+    waypoints = length_tuning.generate_meander(
+        start_mm, end_mm, target_length_mm,
+        amplitude_mm=amplitude_mm,
+        side=side_map[side],
+        base_width_mm=base_width_mm,
+    )
+    net_idx = 0
+    if net_name:
+        idx = find_net_index(tree, net_name)
+        if idx is None:
+            raise KeyError(f"net {net_name!r} not found; declare it first or omit net_name")
+        net_idx = idx
+
+    page_h = page_height_mm(tree)
+    new_segments: list[list] = []
+    for i in range(len(waypoints) - 1):
+        x1m, y1m = waypoints[i]
+        x2m, y2m = waypoints[i + 1]
+        x1k, y1k = mcp_to_kicad_xy(x1m, y1m, page_h)
+        x2k, y2k = mcp_to_kicad_xy(x2m, y2m, page_h)
+        node = [
+            sym("segment"),
+            [sym("start"), round_mm(x1k), round_mm(y1k)],
+            [sym("end"), round_mm(x2k), round_mm(y2k)],
+            [sym("width"), round_mm(width_mm)],
+            [sym("layer"), layer],
+            [sym("net"), net_idx],
+            [sym("uuid"), _uuid()],
+        ]
+        tree.append(node)
+        new_segments.append(node)
+    return new_segments
+
+
+def _uuid() -> str:
+    import uuid as _u
+    return str(_u.uuid4())
 
 
 # --------------------------------------------------------------------------- #

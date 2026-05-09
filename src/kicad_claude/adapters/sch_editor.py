@@ -437,6 +437,92 @@ def add_no_connect(tree: list, x_mm: float, y_mm: float) -> list:
 
 
 # --------------------------------------------------------------------------- #
+# Buses (visual grouping of multiple nets)
+# --------------------------------------------------------------------------- #
+
+
+def add_bus_segment(
+    tree: list,
+    x1_mm: float,
+    y1_mm: float,
+    x2_mm: float,
+    y2_mm: float,
+) -> list:
+    """Append a `(bus ...)` line — visually identical to a wire but thicker."""
+    page_h = page_height_mm(tree)
+    x1k, y1k = mcp_to_kicad_xy(x1_mm, y1_mm, page_h)
+    x2k, y2k = mcp_to_kicad_xy(x2_mm, y2_mm, page_h)
+    node = [
+        sym("bus"),
+        [
+            sym("pts"),
+            [sym("xy"), round_mm(x1k), round_mm(y1k)],
+            [sym("xy"), round_mm(x2k), round_mm(y2k)],
+        ],
+        [sym("stroke"), [sym("width"), 0], [sym("type"), sym("default")]],
+        [sym("uuid"), str(uuid.uuid4())],
+    ]
+    tree.append(node)
+    return node
+
+
+def add_bus_entry(
+    tree: list,
+    x_mm: float,
+    y_mm: float,
+    direction: str = "right_down",
+) -> list:
+    """Append a `(bus_entry ...)` — the diagonal line connecting a bus to a wire.
+
+    `direction` controls the size vector (the offset from `at` to the wire side):
+        "right_down" → (+2.54, +2.54)  (default; bus above-left, wire below-right)
+        "right_up"   → (+2.54, -2.54)
+        "left_down"  → (-2.54, +2.54)
+        "left_up"    → (-2.54, -2.54)
+    """
+    deltas = {
+        "right_down": (2.54, 2.54),
+        "right_up": (2.54, -2.54),
+        "left_down": (-2.54, 2.54),
+        "left_up": (-2.54, -2.54),
+    }
+    if direction not in deltas:
+        raise ValueError(
+            f"direction must be one of {list(deltas)} (got {direction!r})"
+        )
+    dx, dy = deltas[direction]
+    page_h = page_height_mm(tree)
+    xk, yk = mcp_to_kicad_xy(x_mm, y_mm, page_h)
+    node = [
+        sym("bus_entry"),
+        [sym("at"), round_mm(xk), round_mm(yk)],
+        [sym("size"), dx, dy],
+        [sym("stroke"), [sym("width"), 0], [sym("type"), sym("default")]],
+        [sym("uuid"), str(uuid.uuid4())],
+    ]
+    tree.append(node)
+    return node
+
+
+def add_bus_alias(tree: list, alias_name: str, members: list[str]) -> list:
+    """Declare `(bus_alias "NAME" (members "M0" "M1" ...))`.
+
+    Aliases let you label a bus with a short name on the wire (e.g. "MEM")
+    instead of writing out `MEM[0..7]`. Members must be exact net names.
+    """
+    if not alias_name:
+        raise ValueError("alias_name must be non-empty")
+    if not members:
+        raise ValueError("alias needs at least one member net")
+    members_node: list = [sym("members")]
+    for m in members:
+        members_node.append(str(m))
+    node = [sym("bus_alias"), alias_name, members_node]
+    tree.append(node)
+    return node
+
+
+# --------------------------------------------------------------------------- #
 # Hierarchical sheets
 # --------------------------------------------------------------------------- #
 

@@ -462,6 +462,123 @@ def register(mcp) -> None:
         }
 
     @mcp.tool()
+    def list_diff_pair_candidates() -> dict:
+        """Auto-detect differential pairs by net name conventions.
+
+        Recognizes `_P/_N`, `+/-`, and `DP/DM` (USB-style) suffixes. Only
+        returns pairs where BOTH members exist on the PCB. Useful before
+        autorouting — pairs detected here will be routed coupled by
+        Freerouting if the assigned net class has diff_pair_width / gap.
+        """
+        tree, _ = _load_active_pcb()
+        return {"pairs": ed.find_diff_pair_candidates(tree)}
+
+    @mcp.tool()
+    def list_nets() -> dict:
+        """List every net declared at the PCB top level."""
+        tree, _ = _load_active_pcb()
+        return {"nets": ed.list_nets(tree)}
+
+    @mcp.tool()
+    def compute_trace_length(net_name: str) -> dict:
+        """Total trace length on a net (mm), summed across all layers/segments."""
+        tree, _ = _load_active_pcb()
+        return ed.compute_trace_length(tree, net_name)
+
+    @mcp.tool()
+    def validate_diff_pair_length_match(
+        positive_net: str,
+        negative_net: str,
+        tolerance_mm: float = 0.5,
+    ) -> dict:
+        """Check that two diff pair nets are within `tolerance_mm` of each other.
+
+        Returns lengths, skew, and `within_tolerance` boolean. Use after
+        autoroute to decide whether length tuning (add_meander) is needed.
+        """
+        tree, _ = _load_active_pcb()
+        p = ed.compute_trace_length(tree, positive_net)
+        n = ed.compute_trace_length(tree, negative_net)
+        skew = abs(p["total_mm"] - n["total_mm"])
+        return {
+            "positive_net": positive_net,
+            "negative_net": negative_net,
+            "positive_length_mm": p["total_mm"],
+            "negative_length_mm": n["total_mm"],
+            "skew_mm": round(skew, 4),
+            "tolerance_mm": tolerance_mm,
+            "within_tolerance": skew <= tolerance_mm,
+            "longer_net": positive_net if p["total_mm"] > n["total_mm"] else negative_net,
+        }
+
+    @mcp.tool()
+    def add_meander(
+        x1_mm: float,
+        y1_mm: float,
+        x2_mm: float,
+        y2_mm: float,
+        target_length_mm: float,
+        amplitude_mm: float = 1.5,
+        side: str = "up",
+        width_mm: float = 0.25,
+        layer: str = "F.Cu",
+        net_name: str | None = None,
+    ) -> dict:
+        """Add a triangular-meander trace from (x1,y1) to (x2,y2) totaling `target_length_mm`.
+
+        For length tuning of high-speed signals (DDR, USB, Ethernet diff
+        pairs). The meander is placed perpendicular to the line connecting
+        the endpoints; `side` chooses which side ("up" / "down" relative to
+        the perpendicular direction).
+
+        Typical workflow:
+          1. autoroute_pcb → traces routed
+          2. validate_diff_pair_length_match(p, n) → reports skew
+          3. compute_trace_length(longer_net), compute_trace_length(shorter_net)
+          4. Manually delete a straight segment of the shorter net in KiCAD
+             GUI, then call add_meander between its endpoints with target =
+             longer_length.
+
+        Raises ValueError if `target_length_mm` is shorter than the straight
+        distance, or the meander region doesn't fit (increase amplitude).
+        """
+        tree, path = _load_active_pcb()
+        segs = ed.add_meander_segments(
+            tree,
+            start_mm=(x1_mm, y1_mm),
+            end_mm=(x2_mm, y2_mm),
+            target_length_mm=target_length_mm,
+            amplitude_mm=amplitude_mm,
+            side=side,
+            width_mm=width_mm,
+            layer=layer,
+            net_name=net_name,
+        )
+        backup = _save_with_backup(tree, path)
+        # Total achieved length
+        total = 0.0
+        import math
+        for seg in segs:
+            start = sch_io.find_child(seg, "start")
+            end = sch_io.find_child(seg, "end")
+            total += math.hypot(
+                float(end[1]) - float(start[1]),
+                float(end[2]) - float(start[2]),
+            )
+        return {
+            "from_mm": [x1_mm, y1_mm],
+            "to_mm": [x2_mm, y2_mm],
+            "target_length_mm": target_length_mm,
+            "achieved_length_mm": round(total, 4),
+            "segment_count": len(segs),
+            "amplitude_mm": amplitude_mm,
+            "side": side,
+            "layer": layer,
+            "net": net_name or "(unconnected)",
+            "backup": str(backup) if backup else None,
+        }
+
+    @mcp.tool()
     def add_via(
         x_mm: float,
         y_mm: float,

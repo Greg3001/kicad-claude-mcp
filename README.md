@@ -8,8 +8,8 @@ Full implementation spec: [`kicad-claude-mcp-spec.md`](./kicad-claude-mcp-spec.m
 
 ## Status
 
-**Phases 0–11 complete.** 65 MCP tools registered. 128 fast tests +
-25 acceptance tests pass.
+**Phases 0–12 complete.** 74 MCP tools registered. 148 fast tests +
+26 acceptance tests pass.
 
 | Phase | What it adds | Tools |
 |------|--------------|-------|
@@ -25,6 +25,7 @@ Full implementation spec: [`kicad-claude-mcp-spec.md`](./kicad-claude-mcp-spec.m
 | 9 | Manufacturing outputs (gerbers, drill, BOM, 3D render, SVG) | `export_gerbers`, `export_drill`, `export_pos`, `export_bom`, `export_netlist`, `render_pcb_3d`, `export_pcb_svg`, `export_fab_package` |
 | 10 | Design rules + net classes + annotation + schematic↔PCB sync | `set_design_rules`, `apply_fab_preset`, `list_fab_presets`, `add_net_class`, `remove_net_class`, `assign_net_class`, `list_net_classes`, `annotate_schematic`, `update_pcb_from_schematic` |
 | 11 | Copper zones, mounting holes, silk, fiducials, sourcing-enriched BOM | `add_zone`, `add_ground_plane`, `add_silk_text`, `add_mounting_hole`, `add_fiducial`, `enrich_bom_with_sourcing` |
+| 12 | Diff pairs, length tuning (meander), schematic buses | `list_diff_pair_candidates`, `add_diff_pair_class`, `list_nets`, `compute_trace_length`, `validate_diff_pair_length_match`, `add_meander`, `add_bus`, `add_bus_entry`, `add_bus_alias` |
 
 Phase-by-phase notes and the technical decisions that diverge from the spec
 live in [`docs/PROGRESS.md`](./docs/PROGRESS.md).

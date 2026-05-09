@@ -129,6 +129,54 @@ def register(mcp) -> None:
         return {"net_class": cls}
 
     @mcp.tool()
+    def add_diff_pair_class(
+        name: str,
+        diff_pair_width_mm: float = 0.15,
+        diff_pair_gap_mm: float = 0.15,
+        track_width_mm: float | None = None,
+        clearance_mm: float | None = None,
+        via_diameter_mm: float | None = None,
+        via_drill_mm: float | None = None,
+        description: str = "",
+    ) -> dict:
+        """Convenience: create a net class tuned for differential pair routing.
+
+        Sets `diff_pair_width` and `diff_pair_gap` (the two fields KiCAD's
+        DSN exporter writes into the Specctra file so Freerouting routes
+        the pair coupled). `track_width` etc. are optional overrides.
+
+        Common targets:
+          - USB 2.0 90Ω: diff_pair_width 0.2 mm, gap 0.18 mm
+          - Ethernet 100Ω: diff_pair_width 0.3 mm, gap 0.2 mm
+          - HDMI 100Ω: diff_pair_width 0.18 mm, gap 0.18 mm
+
+        After creating the class, use `assign_net_class` with patterns
+        matching both pair members (e.g. "USB_*") and ensure your nets are
+        named with `_P/_N`, `+/-`, or `DP/DM` so KiCAD pairs them correctly.
+        """
+        proj = state.get_active()
+        pro = ps.load_pro(proj.pro_path)
+        cls = ps.add_or_update_net_class(
+            pro, name,
+            track_width_mm=track_width_mm,
+            clearance_mm=clearance_mm,
+            via_diameter_mm=via_diameter_mm,
+            via_drill_mm=via_drill_mm,
+            diff_pair_width_mm=diff_pair_width_mm,
+            diff_pair_gap_mm=diff_pair_gap_mm,
+            description=description or f"Diff pair class — {diff_pair_width_mm}/{diff_pair_gap_mm} mm",
+        )
+        ps.save_pro(proj.pro_path, pro)
+        return {
+            "net_class": cls,
+            "tip": (
+                "Run `assign_net_class` with patterns like 'USB_*' or 'HDMI_*' "
+                "to bind your diff pair nets. Make sure pair members use "
+                "_P/_N, +/-, or DP/DM suffixes so Freerouting recognizes them."
+            ),
+        }
+
+    @mcp.tool()
     def remove_net_class(name: str) -> dict:
         """Remove a net class. Also drops any pattern assignments referring to it."""
         proj = state.get_active()

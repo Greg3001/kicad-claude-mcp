@@ -14,6 +14,7 @@
 | 9 | Manufacturing outputs (gerbers, drill, BOM, render, fab package) | ✅ completada |
 | 10 | Design rules + net classes + auto-annotation + schematic↔PCB sync | ✅ completada |
 | 11 | Copper zones + mounting holes + silk text + fiducials + BOM enriquecido | ✅ completada |
+| 12 | Diff pairs + length tuning (meander) + buses de comunicación | ✅ completada |
 
 ## Fase 0 — checklist
 
@@ -251,9 +252,43 @@ sustituida en `.env`, `check_availability` devolverá ambos lados.
 - **`sourcing_field` configurable.** Por defecto "Value" (lo que KiCAD escribe sin más config), pero el usuario puede pasar "MPN" si su esquema tiene ese campo custom.
 - **Errores parciales surfaced.** Si Mouser falla auth, las columnas `mo_*` quedan vacías y el `errors` dict del resultado lo refleja — el resto del BOM sigue enriquecido.
 
+## Fase 12 — checklist
+
+### Differential pair routing
+
+- [x] `pcb_editor.find_diff_pair_candidates`: detecta pares por sufijos `_P/_N`, `+/-`, `DP/DM`. Strip de separador final del base name (USB_DP+USB_DM → "USB").
+- [x] `tool list_diff_pair_candidates` lo expone
+- [x] `tool add_diff_pair_class(name, diff_pair_width, diff_pair_gap, ...)` — wrapper sobre `add_net_class` con campos diff_pair llenos. Tip incluido en respuesta sobre naming + assign_net_class.
+
+### Length tuning
+
+- [x] `adapters/length_tuning.py`: generador puro-Python de patrón triangular. Auto-ajusta amplitud efectiva para hit del target exacto (resuelve `2·hypot(b/2, A) − b = ΔL/n_bumps` para `A`).
+- [x] `tool compute_trace_length(net_name)`: suma segmentos por net, breakdown por capa
+- [x] `tool validate_diff_pair_length_match(p, n, tolerance)` — reporta skew + cuál es el más largo
+- [x] `tool add_meander(x1, y1, x2, y2, target_length, amplitude, side, layer, net)`: emite chain de `(segment ...)`, side="up"/"down" perpendicular, hits target con precisión <0.001mm
+- [x] Default `base_width = amplitude` (extras 1.236× per base — empaqueta más en menos espacio que el inicial 2A)
+
+### Buses
+
+- [x] `sch_editor.add_bus_segment(x1, y1, x2, y2)` → `(bus ...)` con stroke
+- [x] `sch_editor.add_bus_entry(x, y, direction)`: 4 direcciones (right_down/right_up/left_down/left_up), size=2.54×2.54 default
+- [x] `sch_editor.add_bus_alias(name, members)` → `(bus_alias "DATA" (members "D0" "D1" ...))`
+- [x] Tools MCP equivalentes (`add_bus`, `add_bus_entry`, `add_bus_alias`)
+- [x] Buses respetan `active_sheet` (multi-sheet aware)
+- [x] **Acceptance**: tablero con USB diff pair detectado, USB net class con dp_width=0.2/dp_gap=0.18, meander 55mm exacto, bus + alias DATA[0..7] en esquema, kicad-cli sch erc + pcb drc returncode 0.
+
+## Decisiones técnicas (Fase 12)
+
+- **Diff pair coupling vía Freerouting transparente**: KiCAD's Specctra DSN exporter ya emite `(class diff_pair ...)` automáticamente cuando una netclass tiene `diff_pair_width` y `diff_pair_gap` > 0. Nuestro trabajo es solo asegurar esos campos en la netclass + naming consistente.
+- **Detection patterns con strip de separator**: `USB_DP` matches "DP" suffix, base "USB_" → strip → "USB" para display. Permite tanto `USB_DP/USB_DM` como `USBDP/USBDM`.
+- **Meander auto-ajusta amplitud efectiva**: con `n_bumps` redondeado al entero superior, hay overshoot. Resolvemos para A_eff que hit el target exacto con esos n_bumps. Así achieved_length ≈ target con precisión <0.001mm.
+- **Triangular wave > rectangular**: KiCAD GUI usa rectangular con esquinas a 45°, pero triangular es más simple de generar y KiCAD lo acepta. El usuario puede afinar en GUI.
+- **Buses son visuales**: las conexiones eléctricas reales se hacen vía labels en wires individuales. El `bus_alias` solo permite escribir "DATA" en vez de "DATA[0..7]" en la línea, y KiCAD expande a los miembros declarados.
+- **`add_meander` no modifica trazas existentes**: el usuario borra el segmento recto en la GUI (o programáticamente con un futuro tool) y añade el meander entre los mismos endpoints. Trade-off: más explícito y reversible, sin tocar nada que no haya pedido.
+
 ## Resumen del proyecto
 
-**65 tools MCP** registrados. **128 tests rápidos + 25 acceptance**. 12 commits limpios.
+**74 tools MCP** registrados. **148 tests rápidos + 26 acceptance**. 13 commits limpios.
 
 ## Notas
 

@@ -300,6 +300,75 @@ def register(mcp) -> None:
         x, y = ed.get_pin_position(tree, reference, pin)
         return {"reference": reference, "pin": pin, "position_mm": [x, y]}
 
+    # ----- Buses (visual grouping of multiple nets) ----------------------- #
+
+    @mcp.tool()
+    def add_bus(
+        x1_mm: float,
+        y1_mm: float,
+        x2_mm: float,
+        y2_mm: float,
+    ) -> dict:
+        """Add a bus line to the active sheet.
+
+        A bus is the thick line that visually groups several wires (e.g.
+        an 8-bit data bus). Each wire that taps off the bus uses
+        `add_bus_entry` and a `add_label` with the individual net name.
+
+        Bus naming uses KiCAD conventions:
+          - Bracket form: `DATA[0..7]` for 8 wires
+          - Alias form: declare with `add_bus_alias("DATA", ["D0", "D1", ...])`
+        """
+        tree, path = _load_active_schematic()
+        ed.add_bus_segment(tree, x1_mm, y1_mm, x2_mm, y2_mm)
+        backup = _save_with_backup(tree, path)
+        return {
+            "from_mm": [x1_mm, y1_mm],
+            "to_mm": [x2_mm, y2_mm],
+            "sheet": state.get_active_sheet_filename() or "root",
+            "backup": str(backup) if backup else None,
+        }
+
+    @mcp.tool()
+    def add_bus_entry(
+        x_mm: float,
+        y_mm: float,
+        direction: str = "right_down",
+    ) -> dict:
+        """Add a `(bus_entry ...)` — the diagonal connector from a bus to a wire.
+
+        `direction` is one of: right_down, right_up, left_down, left_up.
+        Place at the point where the bus meets the entry; KiCAD draws a
+        diagonal line from there to the wire side.
+        """
+        tree, path = _load_active_schematic()
+        ed.add_bus_entry(tree, x_mm, y_mm, direction=direction)
+        backup = _save_with_backup(tree, path)
+        return {
+            "position_mm": [x_mm, y_mm],
+            "direction": direction,
+            "sheet": state.get_active_sheet_filename() or "root",
+            "backup": str(backup) if backup else None,
+        }
+
+    @mcp.tool()
+    def add_bus_alias(alias_name: str, members: list[str]) -> dict:
+        """Declare a bus alias: short name → list of member net names.
+
+        Example: `add_bus_alias("MEM", ["MA0","MA1","MA2","MA3","MA4","MA5","MA6","MA7"])`.
+        After this, the bus can be labelled "MEM" and KiCAD expands it to MA0..MA7.
+        """
+        tree, path = _load_active_schematic()
+        ed.add_bus_alias(tree, alias_name, members)
+        backup = _save_with_backup(tree, path)
+        return {
+            "alias": alias_name,
+            "members": members,
+            "member_count": len(members),
+            "sheet": state.get_active_sheet_filename() or "root",
+            "backup": str(backup) if backup else None,
+        }
+
     # ----- Hierarchical sheets ------------------------------------------- #
 
     @mcp.tool()
