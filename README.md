@@ -8,8 +8,8 @@ Full implementation spec: [`kicad-claude-mcp-spec.md`](./kicad-claude-mcp-spec.m
 
 ## Status
 
-**All 8 phases complete (0–7).** 35 MCP tools registered. 80 fast tests +
-10 acceptance tests pass.
+**All phases complete (0–8).** 42 MCP tools registered. 93 fast tests +
+14 acceptance tests pass.
 
 | Phase | What it adds | Tools |
 |------|--------------|-------|
@@ -18,9 +18,10 @@ Full implementation spec: [`kicad-claude-mcp-spec.md`](./kicad-claude-mcp-spec.m
 | 2 | KiCAD library indexer + fuzzy search | `index_libraries`, `list_libraries`, `search_symbol`, `search_footprint`, `get_symbol_details` |
 | 3 | Schematic editing | `add_symbol`, `remove_symbol`, `move_symbol`, `add_wire`, `add_label`, `add_power_symbol`, `add_no_connect`, `list_pins`, `get_pin_position` |
 | 4 | External sourcing (DigiKey, Mouser, vendor ZIP import) | `check_availability`, `find_or_fetch_symbol`, `import_vendor_zip`, `list_vendor_parts` |
-| 5 | PCB editing | `set_board_outline`, `list_footprints`, `add_footprint`, `move_footprint`, `place_footprints_grid`, `add_track`, `add_via` |
+| 5 | PCB editing | `set_layer_count`, `set_board_outline`, `list_footprints`, `add_footprint`, `move_footprint`, `place_footprints_grid`, `add_track`, `add_via` |
 | 6 | Autorouting via Freerouting 2.1.0 | `autoroute_pcb`, `export_dsn`, `import_ses` |
 | 7 | Validation (ERC/DRC via `kicad-cli`) | `run_erc`, `run_drc` |
+| 8 | Hierarchical sheets + 2-32 layer PCBs (extra-spec) | `add_sheet`, `set_active_sheet`, `get_active_sheet`, `list_sheets`, `add_hierarchical_label`, `add_sheet_pin` |
 
 Phase-by-phase notes and the technical decisions that diverge from the spec
 live in [`docs/PROGRESS.md`](./docs/PROGRESS.md).

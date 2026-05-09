@@ -24,7 +24,7 @@ from typing import Any
 
 import sexpdata
 
-from kicad_claude.adapters import sch_io
+from kicad_claude.adapters import pcb_layers, sch_io
 from kicad_claude.adapters.sch_io import (
     find_child,
     find_children,
@@ -63,6 +63,93 @@ def page_height_mm(tree: list) -> float:
         }
         return sizes.get(paper[1], DEFAULT_PAGE_HEIGHT_MM)
     return DEFAULT_PAGE_HEIGHT_MM
+
+
+# --------------------------------------------------------------------------- #
+# Layer-count reconfiguration
+# --------------------------------------------------------------------------- #
+
+
+def get_copper_layer_count(tree: list) -> int:
+    """Count the signal layers (copper) in the active PCB."""
+    layers = find_child(tree, "layers")
+    if not layers:
+        return 0
+    n = 0
+    for row in layers[1:]:
+        if isinstance(row, list) and len(row) >= 3:
+            kind = row[2]
+            if isinstance(kind, type(sym("x"))) and str(kind) == "signal":
+                n += 1
+    return n
+
+
+def get_copper_layer_names(tree: list) -> list[str]:
+    """Names of signal copper layers in file-order: F.Cu, In*.Cu..., B.Cu."""
+    layers = find_child(tree, "layers")
+    if not layers:
+        return []
+    names: list[str] = []
+    for row in layers[1:]:
+        if isinstance(row, list) and len(row) >= 3:
+            kind = row[2]
+            if isinstance(kind, type(sym("x"))) and str(kind) == "signal":
+                if isinstance(row[1], str):
+                    names.append(row[1])
+    return names
+
+
+def set_copper_layer_count(tree: list, n: int) -> dict:
+    """Replace the `(layers ...)` block and the `(setup (stackup ...) ...)`
+    sub-block to reflect `n` copper layers.
+
+    Existing tracks/vias/footprints on layers that disappear are NOT migrated;
+    they keep their layer name in the file but those layers won't exist, and
+    KiCAD's DRC will complain. Set the layer count BEFORE adding tracks.
+    """
+    n = int(n)
+    if n < 2 or n > pcb_layers.MAX_COPPER_LAYERS or n % 2:
+        raise ValueError(
+            f"copper layer count must be even and 2-{pcb_layers.MAX_COPPER_LAYERS} "
+            f"(got {n})"
+        )
+
+    # Replace (layers ...)
+    new_layers = pcb_layers.build_layers_block(n)
+    for i, child in enumerate(tree):
+        if is_call(child, "layers"):
+            tree[i] = new_layers
+            break
+    else:
+        # Insert near the top (after paper / general)
+        insert_at = 1
+        for i, child in enumerate(tree[1:], start=1):
+            h = head_of(child)
+            if h in ("paper", "general"):
+                insert_at = i + 1
+        tree.insert(insert_at, new_layers)
+
+    # Replace (stackup ...) inside (setup ...)
+    setup = find_child(tree, "setup")
+    new_stackup = pcb_layers.build_stackup_block(n)
+    if setup is None:
+        # Setup block is required; create a minimal one with just the stackup.
+        setup = [sym("setup"), new_stackup]
+        tree.append(setup)
+    else:
+        replaced = False
+        for i, child in enumerate(setup):
+            if is_call(child, "stackup"):
+                setup[i] = new_stackup
+                replaced = True
+                break
+        if not replaced:
+            setup.insert(1, new_stackup)
+
+    return {
+        "copper_layers": n,
+        "layer_names": pcb_layers.copper_layer_names(n),
+    }
 
 
 # --------------------------------------------------------------------------- #

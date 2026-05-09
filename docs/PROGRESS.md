@@ -10,6 +10,7 @@
 | 5 | Edición del PCB | ✅ completada |
 | 6 | Autorouting con Freerouting | ✅ completada |
 | 7 | Validación (ERC/DRC) | ✅ completada |
+| 8 | Hierarchical sheets + multi-layer PCBs (extra-spec) | ✅ completada |
 
 ## Fase 0 — checklist
 
@@ -140,9 +141,40 @@ sustituida en `.env`, `check_availability` devolverá ambos lados.
 - **Severidad por defecto: `all`** (errors + warnings + exclusions). El usuario puede filtrar pasando `severity="error"` solo.
 - **Raw JSON path expuesto** en cada respuesta (`raw_path`) por si quiere inspección a mano o re-parse.
 
+## Fase 8 — checklist (extensiones extra-spec)
+
+### PCBs hasta 12 capas (en realidad hasta 32)
+
+- [x] `adapters/pcb_layers.py`: helpers `copper_layer_names(n)`, `copper_layer_id(name)`, `build_layers_block(n)`, `build_stackup_block(n)`
+- [x] **Patrón de IDs descubierto empíricamente** (vía `pcbnew.SetCopperLayerCount` + inspección): F.Cu=0, B.Cu=2 (constante), In_k.Cu = 2*(k+1)
+- [x] `pcb_editor.set_copper_layer_count(n)` reemplaza `(layers ...)` y `(setup (stackup ...) ...)` enteros
+- [x] Stackup auto-genera dieléctricos con grosor uniforme para placa total ≈ 1.6 mm
+- [x] Tool MCP `set_layer_count(n)` (n par, 2-32)
+- [x] **Acceptance**: PCB de 12 capas con tracks en F.Cu, In3.Cu, In7.Cu, B.Cu → `kicad-cli pcb drc` returncode 0, sin violaciones de layer-undefined.
+
+### Hierarchical sheets
+
+- [x] `state.py`: añade `active_sheet_filename` + helpers `set_active_sheet`, `get_active_sheet_path`
+- [x] `sch_editor`: `instance_path` parameter (en lugar de `schematic_uuid` solo) — soporta paths jerárquicos `/<root>/<child>`
+- [x] `sch_editor.add_sheet_node`: `(sheet ...)` placeholder en root con UUID, properties Sheetname/Sheetfile, instances chain
+- [x] `sch_editor.add_hierarchical_label`: shapes input/output/bidirectional/tri_state/passive
+- [x] `sch_editor.add_sheet_pin`: pin en el sheet placeholder, matched-by-name con label en el child
+- [x] `templates.write_blank_schematic`: helper para crear child sheets blancos (UUID propio)
+- [x] 5 nuevos tools MCP: `add_sheet`, `set_active_sheet`, `get_active_sheet`, `list_sheets`, `add_hierarchical_label`, `add_sheet_pin` (6 en total)
+- [x] **Refactor sin regresiones**: 80 tests previos siguen verdes tras cambiar `instance_path`
+- [x] **Acceptance**: jerarquía 2 niveles (root → PSU sheet + Periph sheet), símbolos en cada child con instance path correcto, sheet pins en root → `kicad-cli sch erc` returncode 0.
+
+## Decisiones técnicas (Fase 8)
+
+- **Limitación a múltiplos de 2 en capas.** PCB profesional siempre es par (estructura sandwich). KiCAD acepta impares pero rara vez tiene sentido.
+- **`set_layer_count` debe ir antes de `add_track`/`add_via`** sobre capas internas: items en capas que dejan de existir tras un cambio quedan huérfanos en el archivo (con warnings de DRC). Documentado en el docstring del tool.
+- **`B.Cu = 2` es constante**, no shift. El instinct de "ID secuencial 0..N-1" era equivocado. La inspección directa de `pcbnew.SaveBoard` reveló el patrón real.
+- **Sheet pins matched by name.** KiCAD asocia pins de un sheet placeholder en el padre con `hierarchical_label` del mismo nombre en el child. La posición geométrica del pin es decorativa; lo que importa es que coincida el nombre.
+- **`active_sheet` global** (no por proyecto). Switching de proyecto resetea a root automáticamente. Trade-off: más sencillo de razonar; coste: si abres dos proyectos en paralelo en el mismo proceso, el estado se interfiere.
+
 ## Resumen del proyecto
 
-Todas las fases del spec completadas. **35 tools MCP** registrados. **80 tests rápidos + 10 acceptance**. Tiempo total de implementación: 1 sesión.
+**42 tools MCP** registrados. **93 tests rápidos + 14 acceptance**. 9 commits limpios.
 
 ## Notas
 

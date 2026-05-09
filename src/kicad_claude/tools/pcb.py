@@ -76,6 +76,22 @@ def register(mcp) -> None:
     """Register Phase 5 tools on the FastMCP instance."""
 
     @mcp.tool()
+    def set_layer_count(n: int) -> dict:
+        """Reconfigure the active PCB to have `n` copper layers.
+
+        `n` must be even, 2-32. The `(layers ...)` block and the
+        `(setup (stackup ...) ...)` sub-block are regenerated to match.
+
+        Call this BEFORE adding tracks/vias on inner layers — existing items
+        on layers that no longer exist will trigger DRC errors.
+        """
+        tree, path = _load_active_pcb()
+        result = ed.set_copper_layer_count(tree, n)
+        backup = _save_with_backup(tree, path)
+        result["backup"] = str(backup) if backup else None
+        return result
+
+    @mcp.tool()
     def set_board_outline(
         width_mm: float,
         height_mm: float,

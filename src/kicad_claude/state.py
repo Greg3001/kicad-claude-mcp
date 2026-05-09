@@ -38,6 +38,7 @@ class ActiveProject:
 
 
 _active: ActiveProject | None = None
+_active_sheet: str | None = None  # filename relative to proj.path; None == root
 
 
 class NoActiveProjectError(RuntimeError):
@@ -46,10 +47,11 @@ class NoActiveProjectError(RuntimeError):
 
 def set_active(path: Path | str, name: str) -> ActiveProject:
     """Mark a project as active. Validates that the three files exist."""
-    global _active
+    global _active, _active_sheet
     project = ActiveProject(path=Path(path).resolve(), name=name)
     project.validate()
     _active = project
+    _active_sheet = None  # reset to root on project switch
     return project
 
 
@@ -68,5 +70,41 @@ def get_active_or_none() -> ActiveProject | None:
 
 def clear_active() -> None:
     """Reset the active project (used in tests)."""
-    global _active
+    global _active, _active_sheet
     _active = None
+    _active_sheet = None
+
+
+# --------------------------------------------------------------------------- #
+# Active sheet (hierarchical schematic context)
+# --------------------------------------------------------------------------- #
+
+
+def set_active_sheet(filename: str | None) -> None:
+    """Switch the active sub-sheet. `None` or empty string returns to the root.
+
+    Filename is relative to the project directory (e.g. "power_supply.kicad_sch").
+    """
+    global _active_sheet
+    if not filename:
+        _active_sheet = None
+        return
+    if not filename.endswith(".kicad_sch"):
+        raise ValueError(f"sheet filename must end with .kicad_sch (got {filename!r})")
+    proj = get_active()
+    if not (proj.path / filename).is_file():
+        raise FileNotFoundError(f"{proj.path / filename} does not exist")
+    _active_sheet = filename
+
+
+def get_active_sheet_filename() -> str | None:
+    """Return the active sheet's filename, or None when on the root sheet."""
+    return _active_sheet
+
+
+def get_active_sheet_path() -> Path:
+    """Return the absolute path of the active schematic file (root or child)."""
+    proj = get_active()
+    if _active_sheet is None:
+        return proj.sch_path
+    return proj.path / _active_sheet

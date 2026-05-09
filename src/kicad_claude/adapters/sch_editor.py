@@ -207,7 +207,7 @@ def build_symbol_instance(
     rotation_deg: int,
     pin_numbers: list[str],
     project_name: str,
-    schematic_uuid: str,
+    instance_path: str,
     page_h: float,
     footprint: str = "",
     datasheet: str = "~",
@@ -246,7 +246,7 @@ def build_symbol_instance(
             project_name,
             [
                 sym("path"),
-                f"/{schematic_uuid}",
+                instance_path,
                 [sym("reference"), reference],
                 [sym("unit"), 1],
             ],
@@ -289,17 +289,24 @@ def add_symbol(
     rotation: float,
     sym_def_node: list,
     project_name: str,
+    instance_path: str | None = None,
     footprint: str = "",
     datasheet: str = "~",
     description: str = "",
 ) -> list:
-    """Inject a symbol into the schematic. Returns the new (symbol ...) node."""
+    """Inject a symbol into the schematic. Returns the new (symbol ...) node.
+
+    `instance_path` is the KiCAD instance path (e.g. `/<root_uuid>` for the
+    root sheet, `/<root_uuid>/<sheet_uuid>` for a child). If None, defaults
+    to `/<this_file's_uuid>` — only correct for non-hierarchical use.
+    """
     if find_symbol_by_reference(tree, reference) is not None:
         raise ValueError(f"reference {reference!r} already exists")
 
     rot = normalize_rotation(rotation)
     page_h = page_height_mm(tree)
-    schematic_uuid = _schematic_uuid(tree)
+    if instance_path is None:
+        instance_path = f"/{_schematic_uuid(tree)}"
 
     # Inject the lib symbol definition (idempotent on qualified id).
     lib_entry_def = make_lib_symbol_entry(sym_def_node, qualified_lib_id)
@@ -315,7 +322,7 @@ def add_symbol(
         rotation_deg=rot,
         pin_numbers=pins,
         project_name=project_name,
-        schematic_uuid=schematic_uuid,
+        instance_path=instance_path,
         page_h=page_h,
         footprint=footprint,
         datasheet=datasheet,
@@ -424,6 +431,220 @@ def add_no_connect(tree: list, x_mm: float, y_mm: float) -> list:
     ]
     tree.append(node)
     return node
+
+
+# --------------------------------------------------------------------------- #
+# Hierarchical sheets
+# --------------------------------------------------------------------------- #
+
+
+_LABEL_ORIENTATIONS = {"right": 0, "up": 90, "left": 180, "down": 270}
+_VALID_LABEL_SHAPES = {"input", "output", "bidirectional", "tri_state", "passive"}
+
+
+def add_sheet_node(
+    parent_tree: list,
+    *,
+    sheet_name: str,
+    sheet_filename: str,
+    x_mm: float,
+    y_mm: float,
+    width_mm: float,
+    height_mm: float,
+    project_name: str,
+) -> list:
+    """Append a `(sheet ...)` placeholder to the parent (root) schematic.
+
+    The placeholder references `sheet_filename` (relative path) and is sized
+    `width_mm × height_mm`. Returns the new node.
+
+    The bottom-left corner of the sheet sits at MCP (`x_mm`, `y_mm`).
+    """
+    if find_sheet_by_filename(parent_tree, sheet_filename) is not None:
+        raise ValueError(f"sheet {sheet_filename!r} already registered")
+    if find_sheet_by_name(parent_tree, sheet_name) is not None:
+        raise ValueError(f"sheet name {sheet_name!r} already in use")
+
+    page_h = page_height_mm(parent_tree)
+    # KiCAD's sheet block uses the TOP-LEFT corner as its (at ...) origin.
+    # Convert MCP bottom-left + size → KiCAD top-left.
+    bl_k = mcp_to_kicad_xy(x_mm, y_mm, page_h)
+    top_left_kicad = (bl_k[0], bl_k[1] - height_mm)
+    root_uuid = _schematic_uuid(parent_tree)
+    sheet_uuid = str(uuid.uuid4())
+
+    def _prop(name: str, value: str, dy: float, hide: bool) -> list:
+        node: list = [
+            sym("property"),
+            name,
+            value,
+            [sym("at"), round_mm(top_left_kicad[0]), round_mm(top_left_kicad[1] + dy), 0],
+        ]
+        effects: list = [sym("effects"), [sym("font"), [sym("size"), 1.27, 1.27]],
+                         [sym("justify"), sym("left"), sym("bottom")]]
+        if hide:
+            effects.append([sym("hide"), sym("yes")])
+        node.append(effects)
+        return node
+
+    sheet_node = [
+        sym("sheet"),
+        [sym("at"), round_mm(top_left_kicad[0]), round_mm(top_left_kicad[1])],
+        [sym("size"), round_mm(width_mm), round_mm(height_mm)],
+        [sym("fields_autoplaced"), sym("yes")],
+        [sym("stroke"), [sym("width"), 0.1524], [sym("type"), sym("solid")]],
+        [sym("fill"), [sym("color"), 0, 0, 0, 0.0]],
+        [sym("uuid"), sheet_uuid],
+        _prop("Sheetname", sheet_name, -2.54, hide=False),
+        _prop("Sheetfile", sheet_filename, height_mm + 1.27, hide=False),
+        [
+            sym("instances"),
+            [
+                sym("project"),
+                project_name,
+                [sym("path"), f"/{root_uuid}", [sym("page"), "2"]],
+            ],
+        ],
+    ]
+    parent_tree.append(sheet_node)
+    return sheet_node
+
+
+def find_sheet_by_filename(tree: list, filename: str) -> list | None:
+    """Find a `(sheet ...)` node by its Sheetfile property."""
+    for node in tree[1:]:
+        if not is_call(node, "sheet"):
+            continue
+        for prop in find_children(node, "property"):
+            if (
+                len(prop) >= 3
+                and prop[1] == "Sheetfile"
+                and prop[2] == filename
+            ):
+                return node
+    return None
+
+
+def find_sheet_by_name(tree: list, sheet_name: str) -> list | None:
+    """Find a `(sheet ...)` node by its Sheetname property."""
+    for node in tree[1:]:
+        if not is_call(node, "sheet"):
+            continue
+        for prop in find_children(node, "property"):
+            if (
+                len(prop) >= 3
+                and prop[1] == "Sheetname"
+                and prop[2] == sheet_name
+            ):
+                return node
+    return None
+
+
+def get_sheet_uuid(sheet_node: list) -> str:
+    u = find_child(sheet_node, "uuid")
+    if not u or len(u) < 2 or not isinstance(u[1], str):
+        raise ValueError("sheet has no uuid")
+    return u[1]
+
+
+def get_sheet_filename(sheet_node: list) -> str | None:
+    for prop in find_children(sheet_node, "property"):
+        if len(prop) >= 3 and prop[1] == "Sheetfile" and isinstance(prop[2], str):
+            return prop[2]
+    return None
+
+
+def list_sheets(tree: list) -> list[dict]:
+    """Return summaries of every (sheet ...) node in `tree`."""
+    out = []
+    for node in tree[1:]:
+        if not is_call(node, "sheet"):
+            continue
+        name = ""
+        filename = ""
+        for prop in find_children(node, "property"):
+            if len(prop) >= 3:
+                if prop[1] == "Sheetname":
+                    name = prop[2]
+                elif prop[1] == "Sheetfile":
+                    filename = prop[2]
+        u = find_child(node, "uuid")
+        sheet_uuid = u[1] if u and len(u) >= 2 else ""
+        out.append({"name": name, "filename": filename, "uuid": sheet_uuid})
+    return out
+
+
+def add_hierarchical_label(
+    tree: list,
+    *,
+    net_name: str,
+    x_mm: float,
+    y_mm: float,
+    shape: str = "input",
+    orientation: str = "right",
+) -> list:
+    """Append a `(hierarchical_label ...)` to the active sheet's tree."""
+    if shape not in _VALID_LABEL_SHAPES:
+        raise ValueError(f"shape must be one of {sorted(_VALID_LABEL_SHAPES)}")
+    if orientation not in _LABEL_ORIENTATIONS:
+        raise ValueError(
+            f"orientation must be one of {list(_LABEL_ORIENTATIONS)}"
+        )
+    page_h = page_height_mm(tree)
+    xk, yk = mcp_to_kicad_xy(x_mm, y_mm, page_h)
+    node = [
+        sym("hierarchical_label"),
+        net_name,
+        [sym("shape"), sym(shape)],
+        [sym("at"), round_mm(xk), round_mm(yk), _LABEL_ORIENTATIONS[orientation]],
+        [
+            sym("effects"),
+            [sym("font"), [sym("size"), 1.27, 1.27]],
+            [sym("justify"), sym("left")],
+        ],
+        [sym("uuid"), str(uuid.uuid4())],
+    ]
+    tree.append(node)
+    return node
+
+
+def add_sheet_pin(
+    sheet_node: list,
+    *,
+    pin_name: str,
+    shape: str,
+    x_mm: float,
+    y_mm: float,
+    page_h: float,
+    orientation: str = "right",
+) -> list:
+    """Append a `(pin ...)` to a parent's `(sheet ...)` block.
+
+    The pin's name must match a `(hierarchical_label ...)` of the same name
+    inside the child schematic — that's how KiCAD wires the parent net into
+    the child.
+    """
+    if shape not in _VALID_LABEL_SHAPES:
+        raise ValueError(f"shape must be one of {sorted(_VALID_LABEL_SHAPES)}")
+    if orientation not in _LABEL_ORIENTATIONS:
+        raise ValueError(
+            f"orientation must be one of {list(_LABEL_ORIENTATIONS)}"
+        )
+    xk, yk = mcp_to_kicad_xy(x_mm, y_mm, page_h)
+    pin_node = [
+        sym("pin"),
+        pin_name,
+        sym(shape),
+        [sym("at"), round_mm(xk), round_mm(yk), _LABEL_ORIENTATIONS[orientation]],
+        [
+            sym("effects"),
+            [sym("font"), [sym("size"), 1.27, 1.27]],
+            [sym("justify"), sym("right")],
+        ],
+        [sym("uuid"), str(uuid.uuid4())],
+    ]
+    sheet_node.append(pin_node)
+    return pin_node
 
 
 # --------------------------------------------------------------------------- #
