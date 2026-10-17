@@ -295,14 +295,323 @@ def test_move_then_remove_via_tools(blank_project, tmp_path, monkeypatch):
     tree = sch_io.parse_file(blank_project["sch"])
     s = ed.find_symbol_by_reference(tree, "R1")
     at = sch_io.find_child(s, "at")
-    # In KiCAD coords: x=50, y=210-60=150, rot=90
+    # In KiCAD coords: x=50, y=208.28-60=148.28 (A4 flip height on the 2.54 grid), rot=90
     assert at[1] == 50.0
-    assert at[2] == 150.0
+    assert at[2] == 148.28
     assert at[3] == 90
     # Now remove
     _call(mcp, "remove_symbol", reference="R1")
     tree = sch_io.parse_file(blank_project["sch"])
     assert ed.find_symbol_by_reference(tree, "R1") is None
+
+
+# ===== Grid alignment ====================================================== #
+
+
+def _on_grid(v: float, grid: float = 1.27) -> bool:
+    return math.isclose(v / grid, round(v / grid), abs_tol=1e-6)
+
+
+def test_grid_aligned_height_per_paper():
+    from kicad_claude.utils.geometry import grid_aligned_height
+
+    assert grid_aligned_height(210.0) == 208.28  # A4: 82 * 2.54
+    assert grid_aligned_height(297.0) == 294.64  # A3
+    assert grid_aligned_height(215.9) == 215.9  # USLetter is already on grid
+
+
+def test_page_height_is_grid_aligned(blank_project):
+    tree = sch_io.parse_file(blank_project["sch"])
+    assert ed.page_height_mm(tree) == 208.28
+    assert _on_grid(ed.page_height_mm(tree), 2.54)
+
+
+def test_on_grid_mcp_coords_stay_on_kicad_grid(blank_project):
+    tree = sch_io.parse_file(blank_project["sch"])
+    sym_def = ed.fetch_symbol_def(FIXTURES / "MiniLib.kicad_sym", "Resistor")
+    s = ed.add_symbol(
+        tree, qualified_lib_id="MiniLib:Resistor", reference="R1", value="10k",
+        x_mm=101.6, y_mm=127.0, rotation=0, sym_def_node=sym_def, project_name="demo",
+    )
+    w = ed.add_wire(tree, 101.6, 129.54, 101.6, 139.7)
+    at = sch_io.find_child(s, "at")
+    assert _on_grid(at[1]) and _on_grid(at[2])
+    for xy in sch_io.find_children(sch_io.find_child(w, "pts"), "xy"):
+        assert _on_grid(xy[1]) and _on_grid(xy[2])
+    # Pin positions round-trip to the MCP grid too.
+    for p in ed.list_pins_for_symbol(tree, "R1"):
+        assert all(_on_grid(v) for v in p["position_mm"])
+
+
+# ===== ERC report shaping ================================================== #
+
+
+def test_erc_shape_reads_per_sheet_violations(tmp_path):
+    from kicad_claude.adapters import kicad_cli
+
+    data = {
+        "kicad_version": "10.0.1",
+        "sheets": [
+            {
+                "path": "/",
+                "violations": [
+                    {"type": "endpoint_off_grid", "severity": "warning", "items": []},
+                    {"type": "endpoint_off_grid", "severity": "warning", "items": []},
+                    {"type": "pin_not_connected", "severity": "error", "items": []},
+                ],
+            }
+        ],
+    }
+    res = kicad_cli._shape_erc(data, tmp_path / "x.json")
+    assert res["errors"] == 1
+    assert res["warnings"] == 2
+    assert res["total_violations"] == 3
+    assert res["by_type"] == {"endpoint_off_grid": 2, "pin_not_connected": 1}
+    assert res["violations"][0]["sheet"] == "/"
+
+
+# ===== Field placement ===================================================== #
+
+
+def _prop_at(s_node, name):
+    return sch_io.find_child(ed._find_property(s_node, name), "at")
+
+
+def _prop_justify(s_node, name):
+    effects = sch_io.find_child(ed._find_property(s_node, name), "effects")
+    j = sch_io.find_child(effects, "justify")
+    return str(j[1]) if j else None
+
+
+def _add_resistor(tree, ref="R1", x=101.6, y=101.6, rot=0):
+    sym_def = ed.fetch_symbol_def(FIXTURES / "MiniLib.kicad_sym", "Resistor")
+    return ed.add_symbol(
+        tree, qualified_lib_id="MiniLib:Resistor", reference=ref, value="10k",
+        x_mm=x, y_mm=y, rotation=rot, sym_def_node=sym_def, project_name="demo",
+    )
+
+
+def test_add_symbol_places_fields_beside_vertical_body(blank_project):
+    tree = sch_io.parse_file(blank_project["sch"])
+    s = _add_resistor(tree)
+    sx, sy = sch_io.find_child(s, "at")[1:3]
+    ref, val = _prop_at(s, "Reference"), _prop_at(s, "Value")
+    # Pins are top/bottom, so text goes to the right, Reference above Value.
+    assert ref[1] > sx and val[1] > sx
+    assert ref[2] < sy < val[2]
+    assert ref[3] == 0 and val[3] == 0
+    assert _prop_justify(s, "Reference") == "left"
+    assert sch_io.find_child(s, "fields_autoplaced") is not None
+
+
+def test_add_rotated_symbol_keeps_text_horizontal(blank_project):
+    tree = sch_io.parse_file(blank_project["sch"])
+    s = _add_resistor(tree, rot=90)
+    sx, sy = sch_io.find_child(s, "at")[1:3]
+    ref, val = _prop_at(s, "Reference"), _prop_at(s, "Value")
+    # Pins now left/right: text goes above the body, centred on it.
+    assert ref[1] == sx and val[1] == sx
+    assert ref[2] < val[2] < sy
+    # Field angles are relative to the symbol: 90 here renders horizontal.
+    assert ref[3] == 90 and val[3] == 90
+    assert _prop_justify(s, "Value") is None
+
+
+def test_add_symbol_180_flips_local_justify(blank_project):
+    tree = sch_io.parse_file(blank_project["sch"])
+    s = _add_resistor(tree, rot=180)
+    # Local "right" is drawn as left-justified once KiCAD applies the 180° turn.
+    assert _prop_justify(s, "Reference") == "right"
+    assert _prop_at(s, "Reference")[1] > sch_io.find_child(s, "at")[1]
+
+
+def test_move_symbol_carries_fields(blank_project):
+    tree = sch_io.parse_file(blank_project["sch"])
+    s = _add_resistor(tree)
+    before = {n: list(_prop_at(s, n)[1:3]) for n in ("Reference", "Value", "Footprint")}
+    ed.move_symbol(tree, "R1", 101.6 + 25.4, 101.6 - 12.7)
+    for n, (x, y) in before.items():
+        at = _prop_at(s, n)
+        assert math.isclose(at[1], x + 25.4, abs_tol=1e-6)
+        assert math.isclose(at[2], y + 12.7, abs_tol=1e-6)  # MCP down = KiCAD +y
+
+
+def test_move_symbol_rotation_replaces_fields(blank_project):
+    tree = sch_io.parse_file(blank_project["sch"])
+    s = _add_resistor(tree)
+    ed.move_symbol(tree, "R1", 50.8, 50.8, rotation=90)
+    sx, sy = sch_io.find_child(s, "at")[1:3]
+    ref = _prop_at(s, "Reference")
+    assert ref[3] == 90 and ref[1] == sx and ref[2] < sy
+
+
+_POWER_LIB = """(kicad_symbol_lib
+	(version 20251024)
+	(generator "test")
+	(symbol "+5V"
+		(power global)
+		(property "Reference" "#PWR" (at 0 -3.81 0) (hide yes) (effects (font (size 1.27 1.27))))
+		(property "Value" "+5V" (at 0 3.556 0) (effects (font (size 1.27 1.27))))
+		(property "Footprint" "" (at 0 0 0) (hide yes) (effects (font (size 1.27 1.27))))
+		(property "Datasheet" "" (at 0 0 0) (hide yes) (effects (font (size 1.27 1.27))))
+		(property "Description" "Power symbol" (at 0 0 0) (hide yes) (effects (font (size 1.27 1.27))))
+		(symbol "+5V_0_1"
+			(polyline (pts (xy -0.762 1.27) (xy 0 2.54) (xy 0.762 1.27)))
+		)
+		(symbol "+5V_1_1"
+			(pin power_in line (at 0 0 90) (length 0) (hide yes)
+				(name "~" (effects (font (size 1.27 1.27))))
+				(number "1" (effects (font (size 1.27 1.27))))
+			)
+		)
+	)
+)
+"""
+
+
+def test_power_symbol_hides_reference_and_uses_lib_fields(blank_project, tmp_path):
+    lib = tmp_path / "power.kicad_sym"
+    lib.write_text(_POWER_LIB)
+    tree = sch_io.parse_file(blank_project["sch"])
+    s = ed.add_symbol(
+        tree, qualified_lib_id="power:+5V", reference="#PWR0001", value="+5V",
+        x_mm=101.6, y_mm=101.6, rotation=0,
+        sym_def_node=ed.fetch_symbol_def(lib, "+5V"), project_name="demo",
+    )
+    sx, sy = sch_io.find_child(s, "at")[1:3]
+    assert ed._is_hidden(ed._find_property(s, "Reference"))
+    assert not ed._is_hidden(ed._find_property(s, "Value"))
+    # Value sits where the library puts it: 3.556 mm above the origin.
+    val = _prop_at(s, "Value")
+    assert val[1] == sx and math.isclose(val[2], sy - 3.556, abs_tol=1e-6)
+
+
+def test_add_power_symbol_tool_hides_reference(blank_project, tmp_path, monkeypatch):
+    from mcp.server.fastmcp import FastMCP
+
+    sym_dir = tmp_path / "syms"
+    sym_dir.mkdir()
+    (sym_dir / "power.kicad_sym").write_text(_POWER_LIB)
+    idx = kicad_libs.build_index(symbol_dirs=[sym_dir], footprint_dirs=[])
+    monkeypatch.setattr(lib_tools, "load_cache", lambda: idx)
+    monkeypatch.setattr(lib_tools, "_index", None)
+    mcp = FastMCP("test")
+    sch_tools.register(mcp)
+    lib_tools.register(mcp)
+
+    res = _call(mcp, "add_power_symbol", net="+5V", x_mm=101.6, y_mm=101.6)
+    tree = sch_io.parse_file(blank_project["sch"])
+    s = ed.find_symbol_by_reference(tree, res["reference"])
+    assert ed._is_hidden(ed._find_property(s, "Reference"))
+
+
+# ===== Junctions and fields via tools ====================================== #
+
+
+def test_add_junction_tool(blank_project, tmp_path, monkeypatch):
+    mcp = _make_mcp_with_fixture_index(monkeypatch, tmp_path)
+    _call(mcp, "add_junction", x_mm=101.6, y_mm=127.0)
+    tree = sch_io.parse_file(blank_project["sch"])
+    (j,) = sch_io.find_children(tree, "junction")
+    at = sch_io.find_child(j, "at")
+    assert (at[1], at[2]) == (101.6, round(208.28 - 127.0, 4))
+    assert sch_io.find_child(j, "uuid") is not None
+
+
+def test_set_symbol_field_tool(blank_project, tmp_path, monkeypatch):
+    mcp = _make_mcp_with_fixture_index(monkeypatch, tmp_path)
+    _call(mcp, "add_symbol", lib_id="MiniLib:Resistor", reference="R1", value="10k", x_mm=101.6, y_mm=101.6)
+    _call(mcp, "add_symbol", lib_id="MiniLib:Resistor", reference="R2", value="1k", x_mm=127, y_mm=101.6)
+
+    res = _call(mcp, "set_symbol_field", reference="R1", field="Footprint",
+                value="Resistor_SMD:R_0805_2012Metric")
+    assert res["created"] is False
+    res = _call(mcp, "set_symbol_field", reference="R1", field="MPN", value="RC0805FR-0710KL")
+    assert res["created"] is True
+
+    tree = sch_io.parse_file(blank_project["sch"])
+    s = ed.find_symbol_by_reference(tree, "R1")
+    assert ed.get_symbol_property(s, "Footprint") == "Resistor_SMD:R_0805_2012Metric"
+    assert ed.get_symbol_property(s, "MPN") == "RC0805FR-0710KL"
+    assert ed._is_hidden(ed._find_property(s, "MPN"))
+
+    _call(mcp, "set_symbol_field", reference="R1", field="MPN", value="X", visible=True)
+    tree = sch_io.parse_file(blank_project["sch"])
+    assert not ed._is_hidden(ed._find_property(ed.find_symbol_by_reference(tree, "R1"), "MPN"))
+
+    # Renaming the reference updates the instance path too; duplicates are refused.
+    with pytest.raises(ValueError, match="already exists"):
+        _call(mcp, "set_symbol_field", reference="R1", field="Reference", value="R2")
+    _call(mcp, "set_symbol_field", reference="R1", field="Reference", value="R10")
+    tree = sch_io.parse_file(blank_project["sch"])
+    s = ed.find_symbol_by_reference(tree, "R10")
+    inst_ref = sch_io.find_child(
+        sch_io.find_child(sch_io.find_child(sch_io.find_child(s, "instances"), "project"), "path"),
+        "reference",
+    )
+    assert inst_ref[1] == "R10"
+
+
+def test_set_symbol_field_unknown_reference(blank_project, tmp_path, monkeypatch):
+    mcp = _make_mcp_with_fixture_index(monkeypatch, tmp_path)
+    with pytest.raises(KeyError):
+        _call(mcp, "set_symbol_field", reference="R9", field="Value", value="1k")
+
+
+# ===== ERC on a real, on-grid circuit (slow) =============================== #
+
+
+@pytest.mark.slow
+def test_on_grid_circuit_has_no_off_grid_erc_warnings(tmp_path):
+    """Build a divider on the 2.54 grid; ERC must report no endpoint_off_grid."""
+    from kicad_claude.tools import validation as val_tools
+
+    if not find_kicad_cli() or not find_symbol_lib_dirs():
+        pytest.skip("no kicad-cli or KiCAD symbol libs available")
+    cached = kicad_libs.load_cache()
+    if cached is None:
+        pytest.skip("library index not built; run `index_libraries` first")
+    state.clear_active()
+    lib_tools._index = cached
+    write_blank_project(tmp_path / "grid", "grid")
+    state.set_active(tmp_path / "grid", "grid")
+
+    from mcp.server.fastmcp import FastMCP
+    mcp = FastMCP("test")
+    sch_tools.register(mcp)
+    lib_tools.register(mcp)
+    val_tools.register(mcp)
+
+    try:
+        _call(mcp, "add_power_symbol", net="+5V", x_mm=101.6, y_mm=152.4)
+        _call(mcp, "add_symbol", lib_id="Device:R", reference="R1", value="10k", x_mm=101.6, y_mm=127)
+        _call(mcp, "add_symbol", lib_id="Device:R", reference="R2", value="1k", x_mm=101.6, y_mm=101.6)
+        _call(mcp, "add_symbol", lib_id="Device:C", reference="C1", value="100n",
+              x_mm=127, y_mm=114.3, rotation=90)
+        _call(mcp, "add_power_symbol", net="GND", x_mm=101.6, y_mm=76.2)
+
+        def pin(ref, num):
+            return _call(mcp, "get_pin_position", reference=ref, pin=num)["position_mm"]
+
+        def wire(a, b):
+            _call(mcp, "add_wire", x1_mm=a[0], y1_mm=a[1], x2_mm=b[0], y2_mm=b[1])
+
+        wire([101.6, 152.4], pin("R1", "1"))
+        wire(pin("R1", "2"), pin("R2", "1"))
+        wire(pin("R2", "2"), [101.6, 76.2])
+        mid = [101.6, 114.3]
+        wire(mid, pin("C1", "1"))
+        _call(mcp, "add_junction", x_mm=mid[0], y_mm=mid[1])
+        # C1 pin 2 left open on purpose: ERC must surface it as an error.
+
+        erc = _call(mcp, "run_erc")
+    finally:
+        state.clear_active()
+
+    assert "endpoint_off_grid" not in erc["by_type"], erc["by_type"]
+    assert erc["by_type"].get("pin_not_connected", 0) >= 1
+    assert erc["errors"] >= 1
+    assert erc["total_violations"] == erc["errors"] + erc["warnings"] + erc["exclusions"]
 
 
 # ===== Acceptance: voltage divider (slow, real KiCAD libs) ================= #

@@ -69,7 +69,7 @@
 
 ## Decisiones técnicas
 
-- **Y axis**: MCP API Y+ arriba, archivo KiCAD Y+ abajo. Conversión en `geometry.mcp_to_kicad_xy`. Page height A4 landscape = 210mm.
+- **Y axis**: MCP API Y+ arriba, archivo KiCAD Y+ abajo. Conversión en `geometry.mcp_to_kicad_xy`. Page height A4 landscape = 210mm; en esquemáticos el flip usa la altura redondeada a 2,54 mm (208,28) para quedar en la rejilla de 1,27 mm.
 - **Sin `kicad-skip` para escribir**: en su lugar, parse con `sexpdata` + pretty-printer custom (`sch_io.dumps`). KiCAD acepta nuestra salida (returncode 0 en erc/drc). kicad-skip queda para reads donde es conveniente (Phase 1's list_components).
 - **lib_symbols injection**: idempotente por lib_id. Cada `add_symbol` que use un nuevo `lib_id` añade su definición completa al bloque `(lib_symbols ...)`. Reusos no duplican.
 - **Pin position math**: lib coords (Y down) rotadas por símbolo's rotation, luego desplazadas al símbolo origin, luego flip Y para MCP. Verificado con simetría (pin1 + pin2 = 2*center_y).

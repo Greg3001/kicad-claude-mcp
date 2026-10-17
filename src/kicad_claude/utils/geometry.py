@@ -11,6 +11,10 @@ KiCAD `.kicad_sch` files use:
 We translate at the boundary in `mcp_to_kicad_xy` / `kicad_to_mcp_xy`. The
 default page height assumes A4 landscape (the KiCAD schematic default), but
 callers may override it after reading `(paper ...)`.
+
+Schematics flip around `grid_aligned_height(page_h)` rather than the raw page
+height: A4's 210 mm is not a multiple of KiCAD's 1.27 mm connection grid, so
+flipping around it would push every on-grid MCP point off-grid in the file.
 """
 
 from __future__ import annotations
@@ -19,6 +23,15 @@ import math
 
 # A4 landscape — KiCAD's default schematic page (x_max=297, y_max=210 mm).
 DEFAULT_PAGE_HEIGHT_MM = 210.0
+
+# KiCAD's schematic connection grid (50 mil). Flip heights are aligned to twice
+# this (100 mil) so both 1.27 and 2.54 mm MCP grids survive the Y flip.
+SCH_GRID_MM = 1.27
+
+
+def grid_aligned_height(page_height_mm: float, grid_mm: float = 2 * SCH_GRID_MM) -> float:
+    """Largest multiple of `grid_mm` not exceeding the page height (A4: 208.28)."""
+    return round(math.floor(page_height_mm / grid_mm + 1e-9) * grid_mm, 4)
 
 
 def mcp_to_kicad_xy(
