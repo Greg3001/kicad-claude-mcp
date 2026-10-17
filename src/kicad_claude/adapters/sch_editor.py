@@ -11,6 +11,7 @@ helper does the conversion at the boundary.
 
 from __future__ import annotations
 
+import math
 import shutil
 import uuid
 from datetime import datetime
@@ -29,6 +30,8 @@ from kicad_claude.adapters.sch_io import (
 )
 from kicad_claude.utils.geometry import (
     DEFAULT_PAGE_HEIGHT_MM,
+    SCH_GRID_MM,
+    grid_aligned_height,
     mcp_to_kicad_xy,
     normalize_rotation,
     rotate_xy,
@@ -59,7 +62,17 @@ def backup_file(path: Path) -> Path | None:
 
 
 def page_height_mm(tree: list) -> float:
-    """Detect the schematic page height. Defaults to A4 landscape (210mm)."""
+    """Return the Y-flip height for this schematic (MCP y=0 maps to KiCAD y=H).
+
+    This is the paper height (A4 landscape by default) rounded down to the
+    2.54 mm grid, so MCP coordinates on the 1.27 mm grid stay on KiCAD's
+    connection grid after the flip. For A4 that is 208.28 mm, not 210.
+    """
+    return grid_aligned_height(_paper_height_mm(tree))
+
+
+def _paper_height_mm(tree: list) -> float:
+    """Detect the schematic paper height. Defaults to A4 landscape (210mm)."""
     paper = find_child(tree, "paper")
     if paper and len(paper) >= 2 and isinstance(paper[1], str):
         # KiCAD paper sizes (height in mm, landscape orientation by default):
@@ -103,6 +116,34 @@ def set_symbol_property(symbol_node: list, name: str, value: str) -> None:
             prop[2] = value
             return
     raise KeyError(f"property {name!r} not found on symbol")
+
+
+def set_symbol_field(
+    symbol_node: list,
+    name: str,
+    value: str,
+    visible: bool | None = None,
+) -> bool:
+    """Set (or create) a symbol field. Returns True if the field was created.
+
+    New fields are placed at the symbol origin and hidden unless `visible` is
+    True. `visible=None` leaves an existing field's visibility untouched.
+    """
+    created = False
+    prop = _find_property(symbol_node, name)
+    if prop is None:
+        at = find_child(symbol_node, "at")
+        prop = _make_property(name, value, float(at[1]), float(at[2]), hide=not visible)
+        # Keep properties grouped: insert after the last existing one.
+        props = find_children(symbol_node, "property")
+        idx = symbol_node.index(props[-1]) + 1 if props else len(symbol_node)
+        symbol_node.insert(idx, prop)
+        created = True
+    else:
+        prop[2] = value
+    if visible is not None:
+        _set_hidden(prop, not visible)
+    return created
 
 
 def find_symbol_by_reference(tree: list, reference: str) -> list | None:
@@ -212,6 +253,7 @@ def build_symbol_instance(
     footprint: str = "",
     datasheet: str = "~",
     description: str = "",
+    hide_reference: bool = False,
 ) -> list:
     """Construct a new (symbol ...) instance node ready to inject into the schematic."""
     x_k, y_k = mcp_to_kicad_xy(x_mcp, y_mcp, page_h)
@@ -219,20 +261,11 @@ def build_symbol_instance(
 
     inst_uuid = str(uuid.uuid4())
 
-    # Properties — text positioned at the symbol origin; KiCAD will adjust on first
-    # render. We hide Footprint/Datasheet/Description since they are mostly metadata.
+    # Properties start at the symbol origin; `add_symbol` then runs
+    # `autoplace_fields` to move Reference/Value clear of the body. We hide
+    # Footprint/Datasheet/Description since they are mostly metadata.
     def _prop(name: str, val: str, hide: bool) -> list:
-        node: list[Any] = [
-            sym("property"),
-            name,
-            val,
-            [sym("at"), x_k, y_k, 0],
-        ]
-        effects: list[Any] = [sym("effects"), [sym("font"), [sym("size"), 1.27, 1.27]]]
-        if hide:
-            effects.append([sym("hide"), sym("yes")])
-        node.append(effects)
-        return node
+        return _make_property(name, val, x_k, y_k, hide=hide)
 
     pin_nodes = [
         [sym("pin"), num, [sym("uuid"), str(uuid.uuid4())]]
@@ -263,7 +296,7 @@ def build_symbol_instance(
         [sym("on_board"), sym("yes")],
         [sym("dnp"), sym("no")],
         [sym("uuid"), inst_uuid],
-        _prop("Reference", reference, hide=False),
+        _prop("Reference", reference, hide=hide_reference),
         _prop("Value", value, hide=False),
         _prop("Footprint", footprint, hide=True),
         _prop("Datasheet", datasheet, hide=True),
@@ -330,7 +363,10 @@ def add_symbol(
         footprint=footprint,
         datasheet=datasheet,
         description=description,
+        # Power symbols / virtual parts (#PWR, #FLG) keep their ref hidden, like KiCAD.
+        hide_reference=is_power_symbol(lib_entry_def) or reference.startswith("#"),
     )
+    autoplace_fields(instance, lib_entry_def)
     tree.append(instance)
     return instance
 
@@ -364,10 +400,38 @@ def move_symbol(
     at = find_child(s_node, "at")
     if at is None or len(at) < 4:
         raise ValueError("symbol has malformed (at ...) node")
+    dx, dy = round_mm(x_k) - float(at[1]), round_mm(y_k) - float(at[2])
+    old_rot = int(at[3]) % 360
     at[1] = round_mm(x_k)
     at[2] = round_mm(y_k)
+    # Fields are stored in absolute coords: translate them with the symbol.
+    for prop in find_children(s_node, "property"):
+        p_at = find_child(prop, "at")
+        if p_at is not None and len(p_at) >= 3:
+            p_at[1] = round_mm(float(p_at[1]) + dx)
+            p_at[2] = round_mm(float(p_at[2]) + dy)
     if rotation is not None:
         at[3] = normalize_rotation(rotation)
+        if at[3] != old_rot:
+            lib_id = find_child(s_node, "lib_id")
+            sym_def = find_lib_symbol_def(tree, lib_id[1]) if lib_id else None
+            if sym_def is not None:
+                autoplace_fields(s_node, sym_def)
+
+
+def add_junction(tree: list, x_mm: float, y_mm: float) -> list:
+    """Append a (junction ...) dot at a point (needed where 3+ wires meet)."""
+    page_h = page_height_mm(tree)
+    xk, yk = mcp_to_kicad_xy(x_mm, y_mm, page_h)
+    node = [
+        sym("junction"),
+        [sym("at"), round_mm(xk), round_mm(yk)],
+        [sym("diameter"), 0],
+        [sym("color"), 0, 0, 0, 0],
+        [sym("uuid"), str(uuid.uuid4())],
+    ]
+    tree.append(node)
+    return node
 
 
 def add_wire(
@@ -734,6 +798,219 @@ def add_sheet_pin(
     ]
     sheet_node.append(pin_node)
     return pin_node
+
+
+# --------------------------------------------------------------------------- #
+# Symbol fields (properties)
+# --------------------------------------------------------------------------- #
+
+
+def _find_property(symbol_node: list, name: str) -> list | None:
+    for prop in find_children(symbol_node, "property"):
+        if len(prop) >= 3 and prop[1] == name:
+            return prop
+    return None
+
+
+def _make_property(name: str, value: str, x_k: float, y_k: float, *, hide: bool) -> list:
+    effects: list[Any] = [sym("effects"), [sym("font"), [sym("size"), 1.27, 1.27]]]
+    if hide:
+        effects.append([sym("hide"), sym("yes")])
+    return [sym("property"), name, value, [sym("at"), x_k, y_k, 0], effects]
+
+
+def _is_hidden(prop: list) -> bool:
+    """True if a property is hidden (KiCAD 9- puts `hide` in effects, 10 on the property)."""
+    for holder in (prop, find_child(prop, "effects") or []):
+        for child in holder[1:]:
+            if child == sym("hide"):
+                return True
+            if is_call(child, "hide"):
+                return len(child) < 2 or child[1] != sym("no")
+    return False
+
+
+def _set_hidden(prop: list, hidden: bool) -> None:
+    for holder in (prop, find_child(prop, "effects") or []):
+        holder[:] = [c for c in holder if not (c == sym("hide") or is_call(c, "hide"))]
+    if hidden:
+        effects = find_child(prop, "effects")
+        if effects is None:
+            effects = [sym("effects"), [sym("font"), [sym("size"), 1.27, 1.27]]]
+            prop.append(effects)
+        effects.append([sym("hide"), sym("yes")])
+
+
+def _set_justify(prop: list, justify: str | None) -> None:
+    effects = find_child(prop, "effects")
+    if effects is None:
+        effects = [sym("effects"), [sym("font"), [sym("size"), 1.27, 1.27]]]
+        prop.append(effects)
+    effects[:] = [c for c in effects if not is_call(c, "justify")]
+    if justify:
+        effects.append([sym("justify"), sym(justify)])
+
+
+def is_power_symbol(symbol_def_node: list) -> bool:
+    """True for library power symbols (`(power)` / `(power global)` flag)."""
+    return find_child(symbol_def_node, "power") is not None
+
+
+_FIELD_PITCH_MM = 2.54  # spacing between stacked Reference/Value lines
+_FIELD_PAD_MM = 0.635  # gap between the symbol's bbox and the field text
+_TEXT_HALF_H_MM = 0.635  # half the default 1.27 mm text height
+_SIDE_BY_OUTWARD = {0: "right", 90: "top", 180: "left", 270: "bottom"}
+
+
+def _lib_to_world(lx: float, ly: float, rot: float) -> tuple[float, float]:
+    """Offset in lib coords (Y up) → offset from the symbol origin in KiCAD coords (Y down)."""
+    rx, ry = rotate_xy(lx, ly, rot)
+    return rx, -ry
+
+
+def _draw_units(symbol_def_node: list):
+    """Yield the symbol def and its sub-units drawn for unit 1, body style 1."""
+    yield symbol_def_node
+    for child in symbol_def_node[2:]:
+        if is_call(child, "symbol") and len(child) >= 2 and isinstance(child[1], str):
+            parts = child[1].rsplit("_", 2)
+            if len(parts) == 3 and parts[1] in ("0", "1") and parts[2] in ("0", "1"):
+                yield child
+
+
+def _symbol_local_points(symbol_def_node: list) -> list[tuple[float, float]]:
+    """Outline points (lib coords) of body graphics and pins, for the bbox."""
+    pts: list[tuple[float, float]] = []
+
+    def _xy(node: list | None) -> tuple[float, float] | None:
+        if node is None or len(node) < 3:
+            return None
+        return float(node[1]), float(node[2])
+
+    for unit in _draw_units(symbol_def_node):
+        for item in unit[1:]:
+            h = head_of(item)
+            if h == "rectangle":
+                pts += [p for p in (_xy(find_child(item, "start")), _xy(find_child(item, "end"))) if p]
+            elif h in ("polyline", "bezier"):
+                p_node = find_child(item, "pts")
+                pts += [_xy(xy) for xy in find_children(p_node, "xy")] if p_node else []
+            elif h == "circle":
+                c = _xy(find_child(item, "center"))
+                r_node = find_child(item, "radius")
+                if c and r_node:
+                    r = float(r_node[1])
+                    pts += [(c[0] - r, c[1] - r), (c[0] + r, c[1] + r)]
+            elif h == "arc":
+                pts += [p for p in (_xy(find_child(item, k)) for k in ("start", "mid", "end")) if p]
+            elif h == "pin":
+                x, y, a = _pin_local_at(item)
+                ln = find_child(item, "length")
+                length = float(ln[1]) if ln else 0.0
+                dx, dy = rotate_xy(length, 0, a)
+                pts += [(x, y), (x + dx, y + dy)]
+    return pts
+
+
+def _pin_sides(symbol_def_node: list, rot: float) -> set[str]:
+    """World sides ({right, top, left, bottom}) that have pins sticking out."""
+    sides = set()
+    for pin_node, _unit in _iter_pins(symbol_def_node):
+        # A pin's angle points from its tip into the body; outward is opposite.
+        outward = int(round(_pin_local_at(pin_node)[2] + 180 + rot)) % 360
+        if outward in _SIDE_BY_OUTWARD:
+            sides.add(_SIDE_BY_OUTWARD[outward])
+    return sides
+
+
+def _snap_out(value: float, direction: int, grid: float = SCH_GRID_MM) -> float:
+    """Round `value` to the grid, away from the body (direction +1 = up the axis)."""
+    q = value / grid
+    return round((math.ceil(q - 1e-6) if direction > 0 else math.floor(q + 1e-6)) * grid, 4)
+
+
+# A field's angle and justification are stored in the symbol's local frame, so
+# KiCAD rotates them with the symbol. To keep text horizontal and justified as
+# intended on screen, compensate: 90°/270° symbols get 90° field text, and the
+# horizontal justification flips for the rotations that mirror it on screen.
+_JUSTIFY_FLIP_BY_ROT = {0: False, 90: True, 180: True, 270: False}
+_FLIPPED = {"left": "right", "right": "left"}
+
+
+def autoplace_fields(s_node: list, symbol_def_node: list) -> None:
+    """Place Reference/Value next to the symbol body, roughly as KiCAD's autoplacer.
+
+    Power symbols keep the library's field positions (rotated with the
+    symbol). Other symbols get their visible Reference/Value stacked on the
+    first side with no pins, in the order right, top, bottom, left. Text is
+    always horizontal on screen regardless of the symbol rotation.
+    """
+    at = find_child(s_node, "at")
+    sx, sy, rot = float(at[1]), float(at[2]), int(at[3]) % 360
+    local_angle = 90 if rot in (90, 270) else 0
+
+    if is_power_symbol(symbol_def_node):
+        for prop in find_children(s_node, "property"):
+            lib_prop = _find_property(symbol_def_node, prop[1])
+            lib_at = find_child(lib_prop, "at") if lib_prop else None
+            if lib_at is None or len(lib_at) < 3:
+                continue
+            ox, oy = _lib_to_world(float(lib_at[1]), float(lib_at[2]), rot)
+            p_at = find_child(prop, "at")
+            p_at[1], p_at[2] = round_mm(sx + ox), round_mm(sy + oy)
+            p_at[3] = float(lib_at[3]) if len(lib_at) >= 4 else 0
+        return
+
+    world = [_lib_to_world(x, y, rot) for x, y in _symbol_local_points(symbol_def_node)]
+    if not world:
+        world = [(-1.27, -1.27), (1.27, 1.27)]
+    left, right = min(p[0] for p in world), max(p[0] for p in world)
+    top, bottom = min(p[1] for p in world), max(p[1] for p in world)
+
+    fields = [
+        p for p in (_find_property(s_node, n) for n in ("Reference", "Value"))
+        if p is not None and not _is_hidden(p)
+    ]
+    sides = _pin_sides(symbol_def_node, rot)
+    side = next((sd for sd in ("right", "top", "bottom", "left") if sd not in sides), "top")
+    n = len(fields)
+
+    placements: list[tuple[float, float, str | None]] = []
+    if side in ("right", "left"):
+        if side == "right":
+            x = _snap_out(right + _FIELD_PAD_MM, +1)
+        else:
+            x = _snap_out(left - _FIELD_PAD_MM, -1)
+        cy = (top + bottom) / 2
+        for i in range(n):
+            y = round(round((cy + (i - (n - 1) / 2) * _FIELD_PITCH_MM) / SCH_GRID_MM) * SCH_GRID_MM, 4)
+            placements.append((x, y, "left" if side == "right" else "right"))
+    else:
+        cx = round(round((left + right) / 2 / SCH_GRID_MM) * SCH_GRID_MM, 4)
+        if side == "top":
+            # Last field sits closest to the body; earlier ones stack above it.
+            y0 = _snap_out(top - _FIELD_PAD_MM - _TEXT_HALF_H_MM, -1)
+            ys = [y0 - (n - 1 - i) * _FIELD_PITCH_MM for i in range(n)]
+        else:
+            y0 = _snap_out(bottom + _FIELD_PAD_MM + _TEXT_HALF_H_MM, +1)
+            ys = [y0 + i * _FIELD_PITCH_MM for i in range(n)]
+        placements = [(cx, y, None) for y in ys]
+
+    for prop, (ox, oy, justify) in zip(fields, placements):
+        p_at = find_child(prop, "at")
+        p_at[1], p_at[2], p_at[3] = round_mm(sx + ox), round_mm(sy + oy), local_angle
+        if justify and _JUSTIFY_FLIP_BY_ROT[rot]:
+            justify = _FLIPPED[justify]
+        _set_justify(prop, justify)
+
+    # Hidden fields follow the symbol origin so they never linger off-page.
+    for prop in find_children(s_node, "property"):
+        if prop not in fields:
+            p_at = find_child(prop, "at")
+            p_at[1], p_at[2], p_at[3] = round_mm(sx), round_mm(sy), local_angle
+
+    if find_child(s_node, "fields_autoplaced") is None:
+        s_node.insert(s_node.index(find_child(s_node, "uuid")), [sym("fields_autoplaced"), sym("yes")])
 
 
 # --------------------------------------------------------------------------- #

@@ -93,7 +93,7 @@ Add to `~/.claude/settings.json`:
 
 ### Schematic capture
 
-- **Symbol placement & connections**: `add_symbol`, `add_wire`, `add_label`, `add_power_symbol`, `add_no_connect`, `move_symbol`, `remove_symbol`, `get_pin_position`, `list_pins`
+- **Symbol placement & connections**: `add_symbol`, `add_wire`, `add_junction`, `add_label`, `add_power_symbol`, `add_no_connect`, `move_symbol`, `remove_symbol`, `set_symbol_field`, `get_pin_position`, `list_pins`
 - **Hierarchical sheets**: `add_sheet`, `set_active_sheet`, `add_hierarchical_label`, `add_sheet_pin`, `list_sheets` — proper multi-level designs
 - **Buses**: `add_bus`, `add_bus_entry`, `add_bus_alias` — visual grouping of address/data lines
 - **Annotation**: `annotate_schematic` — auto-numbers `R?` → `R1, R2, ...` across all sheets
@@ -159,10 +159,10 @@ Add to `~/.claude/settings.json`:
 
 ```
 # 1. Schematic with auto-annotation
-add_power_symbol  net="+5V"   x_mm=100  y_mm=160
-add_symbol        lib_id="Device:R" reference="R?" value="10k" x_mm=100 y_mm=130
-add_symbol        lib_id="Device:R" reference="R?" value="1k"  x_mm=100 y_mm=80
-add_power_symbol  net="GND"   x_mm=100  y_mm=40
+add_power_symbol  net="+5V"   x_mm=101.6  y_mm=152.4      # multiples of 1.27 = on grid
+add_symbol        lib_id="Device:R" reference="R?" value="10k" x_mm=101.6 y_mm=127
+add_symbol        lib_id="Device:R" reference="R?" value="1k"  x_mm=101.6 y_mm=76.2
+add_power_symbol  net="GND"   x_mm=101.6  y_mm=50.8
 annotate_schematic                                        # R? → R1, R2
 
 # wire pins (using get_pin_position to compute exact endpoints)
@@ -255,6 +255,7 @@ diverged from the original spec.
 - **Logging must go to stderr.** STDIO MCP transports use stdout for JSON-RPC; any `print()` to stdout breaks the connection. Use `from kicad_claude.utils.logging import setup_logging`.
 - **Close KiCAD before mutating files.** KiCAD locks `.kicad_*` files while open and can overwrite the changes you make. Open it to verify, close before next round of edits.
 - **Y axis is flipped.** MCP API exposes Y up; `.kicad_*` files store Y down. Conversion lives in `utils/geometry.py`. If components land in unexpected places, suspect this first.
+- **Schematic grid.** The schematic Y flip is around the page height rounded down to 2.54 mm (A4: 208.28 mm, not 210), so MCP coordinates that are multiples of 1.27 mm land on KiCAD's connection grid. Off-grid inputs show up in `run_erc` as `endpoint_off_grid` warnings.
 - **Freerouting needs Java 21+.** Freerouting 2.2.x requires Java 25; we ship 2.1.0 because it works on Java 21–24.
 - **Closed-form analyses are estimators.** Impedance / current / crosstalk / thermal / return-path tools give ballpark numbers good for early design. Production hardware needs Ansys / Sonnet / Saturn PCB / Icepak for sign-off.
 - **Symbols with `extends`** (like `Device:R_Small` extending `Device:R`) currently inject only the extending symbol; the base isn't pulled. Use the canonical name (`Device:R`) for now.

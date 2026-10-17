@@ -136,9 +136,24 @@ def run_erc(
     return _shape_erc(data, output_json)
 
 
+def _erc_violations(data: dict) -> list[dict]:
+    """Flatten ERC violations. KiCAD 8+ nests them per sheet under `sheets`."""
+    violations = list(data.get("violations") or [])
+    for sheet in data.get("sheets") or []:
+        for v in sheet.get("violations") or []:
+            violations.append({**v, "sheet": sheet.get("path", "")})
+    return violations
+
+
 def _shape_erc(data: dict, raw_path: Path) -> dict:
-    violations = data.get("violations") or []
+    violations = _erc_violations(data)
     counts = _summarize_violations(violations)
+    shaped = []
+    for v in violations:
+        sv = _shape_violation(v)
+        if "sheet" in v:
+            sv["sheet"] = v["sheet"]
+        shaped.append(sv)
     return {
         "kind": "erc",
         "source": data.get("source", ""),
@@ -148,7 +163,8 @@ def _shape_erc(data: dict, raw_path: Path) -> dict:
         "warnings": counts.get("warning", 0),
         "exclusions": counts.get("exclusion", 0),
         "total_violations": sum(counts.values()),
-        "violations": [_shape_violation(v) for v in violations],
+        "by_type": dict(Counter(v["type"] for v in shaped)),
+        "violations": shaped,
         "raw_path": str(raw_path),
     }
 

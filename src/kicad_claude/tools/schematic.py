@@ -1,12 +1,14 @@
 """Phase 3 — schematic editing tools.
 
 Tools (all operate on the active project's `.kicad_sch`):
-    add_symbol, remove_symbol, move_symbol
-    add_wire, add_label, add_no_connect, add_power_symbol
+    add_symbol, remove_symbol, move_symbol, set_symbol_field
+    add_wire, add_junction, add_label, add_no_connect, add_power_symbol
     list_pins, get_pin_position
     list_components_detailed (richer than Phase 1's list_components)
 
-Coordinates: millimetres, Y axis pointing UP (see utils/geometry).
+Coordinates: millimetres, Y axis pointing UP (see utils/geometry). Use
+multiples of 1.27 mm (ideally 2.54) so pins and wires land on KiCAD's
+connection grid; `run_erc` reports `endpoint_off_grid` otherwise.
 Rotations: 0 / 90 / 180 / 270 only.
 """
 
@@ -17,6 +19,7 @@ import re
 from pathlib import Path
 
 from kicad_claude import state
+from kicad_claude.adapters import annotation
 from kicad_claude.adapters import sch_editor as ed
 from kicad_claude.adapters import sch_io
 from kicad_claude.templates.blank import write_blank_schematic
@@ -185,7 +188,10 @@ def register(mcp) -> None:
         y_mm: float,
         rotation: float | None = None,
     ) -> dict:
-        """Move (and optionally rotate) an existing symbol. Absolute positioning."""
+        """Move (and optionally rotate) an existing symbol. Absolute positioning.
+
+        Reference/Value move with the symbol; a rotation change re-places them.
+        """
         tree, path = _load_active_schematic()
         ed.move_symbol(tree, reference, x_mm, y_mm, rotation)
         backup = _save_with_backup(tree, path)
@@ -193,6 +199,50 @@ def register(mcp) -> None:
             "reference": reference,
             "position_mm": [x_mm, y_mm],
             "rotation": rotation,
+            "backup": str(backup) if backup else None,
+        }
+
+    @mcp.tool()
+    def set_symbol_field(
+        reference: str,
+        field: str,
+        value: str,
+        visible: bool | None = None,
+    ) -> dict:
+        """Set a field of a placed symbol, e.g. its Footprint, Value or an MPN.
+
+        Creates the field if the symbol does not have it yet (hidden unless
+        `visible` is True). `visible=None` keeps an existing field's visibility.
+        Renaming the Reference this way is refused if the new one is taken.
+        """
+        tree, path = _load_active_schematic()
+        s_node = ed.find_symbol_by_reference(tree, reference)
+        if s_node is None:
+            raise KeyError(f"no symbol with reference {reference!r}")
+        if field == "Reference" and value != reference and not value.endswith("?"):
+            if ed.find_symbol_by_reference(tree, value) is not None:
+                raise ValueError(f"reference {value!r} already exists")
+        created = ed.set_symbol_field(s_node, field, value, visible)
+        if field == "Reference":
+            # KiCAD reads the reference from (instances ...), not just the property.
+            annotation._update_instance_reference(s_node, value)
+        backup = _save_with_backup(tree, path)
+        return {
+            "reference": value if field == "Reference" else reference,
+            "field": field,
+            "value": value,
+            "created": created,
+            "backup": str(backup) if backup else None,
+        }
+
+    @mcp.tool()
+    def add_junction(x_mm: float, y_mm: float) -> dict:
+        """Add a junction dot where three or more wires/pins meet (T or cross)."""
+        tree, path = _load_active_schematic()
+        ed.add_junction(tree, x_mm, y_mm)
+        backup = _save_with_backup(tree, path)
+        return {
+            "position_mm": [x_mm, y_mm],
             "backup": str(backup) if backup else None,
         }
 
@@ -230,7 +280,7 @@ def register(mcp) -> None:
     def add_power_symbol(net: str, x_mm: float, y_mm: float) -> dict:
         """Place a power symbol (e.g. +5V, +3V3, GND) from the `power` library.
 
-        Auto-assigns a `#PWR####` reference. The library symbol id is
+        Auto-assigns a hidden `#PWR####` reference. The library symbol id is
         `power:{net}`; if that doesn't exist in the index, the call fails with
         a hint listing valid power nets.
         """
