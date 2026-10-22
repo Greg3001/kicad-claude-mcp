@@ -285,6 +285,29 @@ def _strip_top_fields(fp: list, names: set[str]) -> list:
     return [c for c in fp[2:] if head_of(c) not in names]
 
 
+def _legacy_text_to_property(node: Any) -> Any:
+    """`(fp_text reference "REF**" ...)` -> `(property "Reference" "REF**" ...)`.
+
+    Third-party footprints (SnapEDA, Antmicro, anything pre-KiCad 8) keep the
+    reference and value as fp_text; the property-based code below would leave
+    their "REF**" untouched and every pad would miss its net.
+    """
+    if not (is_call(node, "fp_text") and len(node) >= 3):
+        return node
+    kind = str(node[1])
+    if kind not in ("reference", "value"):
+        return node
+    out: list[Any] = [sym("property"), kind.capitalize(), node[2]]
+    for child in node[3:]:
+        if is_call(child, "tstamp"):
+            out.append([sym("uuid"), child[1]])
+        elif child == sym("hide"):
+            out.append([sym("hide"), sym("yes")])
+        else:
+            out.append(child)
+    return out
+
+
 def _build_placed_footprint(
     fp_def: list,
     qualified_lib_id: str,
@@ -305,6 +328,7 @@ def _build_placed_footprint(
         {"version", "generator", "generator_version", "layer", "at", "uuid"},
     )
 
+    core = [_legacy_text_to_property(c) for c in core]
     # Set Reference / Value properties (preserve their (at), (layer), (effects)).
     for c in core:
         if is_call(c, "property") and len(c) >= 3:

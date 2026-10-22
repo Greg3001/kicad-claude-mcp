@@ -13,7 +13,8 @@ import logging
 from pathlib import Path
 
 from kicad_claude import state
-from kicad_claude.adapters import annotation, kicad_cli, kicad_python
+from kicad_claude.adapters import annotation, kicad_cli, kicad_python, pcb_editor, pcb_populate, sch_editor, sch_io
+from kicad_claude.tools import pcb as pcb_tools
 from kicad_claude.tools.schematic import project_sheet_paths
 
 logger = logging.getLogger("kicad-claude.tools.sync")
@@ -35,6 +36,50 @@ def register(mcp) -> None:
         paths = project_sheet_paths()
         result = annotation.annotate_sheets(paths, sort_by_position=sort_by_position)
         return result
+
+    @mcp.tool()
+    def place_footprints_from_schematic(
+        columns: int = 20,
+        pitch_mm: float = 15.0,
+        origin_x_mm: float = 10.0,
+        origin_y_mm: float = 280.0,
+        timeout_seconds: float = 90.0,
+    ) -> dict:
+        """Add every schematic part that is missing from the PCB, in one pass.
+
+        Exports the schematic netlist, then places each part that has a
+        Footprint field and is not on the board yet on a coarse grid
+        (row-major in reference order, `columns` per row, `pitch_mm` apart,
+        starting at the origin and going down). This is a staging area, not a
+        placement: move parts afterwards. Parts without a footprint are listed
+        in `no_footprint`; footprints that cannot be found (not in the global
+        index or a project library) in `unresolved`, and do not stop the rest.
+
+        Run `update_pcb_from_schematic` afterwards to assign nets to the pads.
+        """
+        proj = state.get_active()
+        netlist_xml = proj.path / "fab" / f"{proj.name}-netlist.xml"
+        netlist_xml.parent.mkdir(parents=True, exist_ok=True)
+        kicad_cli.export_netlist(proj.sch_path, netlist_xml, fmt="kicadxml", timeout=timeout_seconds)
+        parts = pcb_populate.netlist_parts(netlist_xml)
+        pcb_path = state.get_active_board_path()
+        tree = sch_io.parse_file(pcb_path)
+        plan = pcb_populate.plan_placements(
+            parts, set(pcb_editor.all_footprint_references(tree)), columns=columns,
+            pitch_mm=pitch_mm, origin=(origin_x_mm, origin_y_mm),
+        )
+        result = pcb_populate.place_all(tree, plan, pcb_tools._resolve_footprint)
+        backup = sch_editor.backup_file(pcb_path)
+        sch_io.write_file(pcb_path, tree)
+        return {
+            "placed": len(result["placed"]),
+            "unresolved": result["unresolved"],
+            "no_footprint": plan["no_footprint"],
+            "already_on_board": len(plan["already_on_board"]),
+            "rows": plan["rows"],
+            "pcb_path": str(pcb_path),
+            "backup": str(backup) if backup else None,
+        }
 
     @mcp.tool()
     def update_pcb_from_schematic(

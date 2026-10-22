@@ -12,9 +12,10 @@ from __future__ import annotations
 import logging
 from pathlib import Path
 
-from skip import PCB, Schematic
+from skip import Schematic
 
 from kicad_claude import state
+from kicad_claude.adapters import sch_editor, sch_io
 from kicad_claude.templates.blank import write_blank_project
 
 logger = logging.getLogger("kicad-claude.tools.project")
@@ -47,9 +48,13 @@ def _resolve_project_dir_and_name(project_path: str) -> tuple[Path, str]:
 
 
 def _summarize(proj: state.ActiveProject) -> dict:
-    """Cheap counts of an active project: symbols, footprints, nets."""
-    sch = Schematic(str(proj.sch_path))
-    pcb = PCB(str(proj.pcb_path))
+    """Cheap counts of an active project: symbols, footprints, nets.
+
+    Uses our own parser, not kicad-skip: skip raises on footprints that still
+    use the legacy `fp_text` form (anything imported from a pre-KiCad 8 library).
+    """
+    sch = sch_io.parse_file(proj.sch_path)
+    pcb = sch_io.parse_file(proj.pcb_path)
     return {
         "path": str(proj.path),
         "name": proj.name,
@@ -58,9 +63,9 @@ def _summarize(proj: state.ActiveProject) -> dict:
             "sch": str(proj.sch_path),
             "pcb": str(proj.pcb_path),
         },
-        "symbols": len(sch.symbol),
-        "footprints": len(getattr(pcb, "footprint", [])),
-        "nets": len(pcb.net),
+        "symbols": len(list(sch_editor.iter_instance_symbols(sch))),
+        "footprints": len(sch_io.find_children(pcb, "footprint")),
+        "nets": len(sch_io.find_children(pcb, "net")),
     }
 
 
