@@ -21,7 +21,7 @@ from pathlib import Path
 from kicad_claude import state
 from kicad_claude.adapters import annotation
 from kicad_claude.adapters import sch_editor as ed
-from kicad_claude.adapters import sch_io, sch_sheets, symbol_lib
+from kicad_claude.adapters import sch_connect, sch_io, sch_sheets, symbol_lib
 from kicad_claude.templates.blank import write_blank_schematic
 from kicad_claude.tools import library as lib_tools
 
@@ -393,6 +393,75 @@ def register(mcp) -> None:
             "reference": reference,
             "pin": pin,
             "position_mm": [x, y],
+            "backup": str(backup) if backup else None,
+        }
+
+    @mcp.tool()
+    def add_global_label(
+        net_name: str,
+        x_mm: float,
+        y_mm: float,
+        shape: str = "bidirectional",
+        orientation: str = "right",
+    ) -> dict:
+        """Add a GLOBAL net label: the same name on any sheet is the same net.
+
+        A plain `add_label` is sheet-scoped (it becomes `/<sheet>/NAME`), so a
+        net that must meet across sheets without a sheet pin needs this (or a
+        hierarchical label + sheet pin). Power symbols are already global.
+
+        `shape`: input | output | bidirectional | tri_state | passive
+        """
+        tree, path = _load_active_schematic()
+        sch_connect.add_global_label(tree, net_name, x_mm, y_mm, shape, orientation)
+        backup = _save_with_backup(tree, path)
+        return {
+            "net": net_name,
+            "shape": shape,
+            "position_mm": [x_mm, y_mm],
+            "sheet": state.get_active_sheet_filename() or "root",
+            "backup": str(backup) if backup else None,
+        }
+
+    @mcp.tool()
+    def connect_pins(
+        reference: str,
+        connections: list[dict],
+        unit: int | None = None,
+        scope: str = "local",
+        stub_mm: float = 5.08,
+        shape: str = "bidirectional",
+    ) -> dict:
+        """Wire many pins of one symbol to nets in a single call.
+
+        Each connection is `{"pin": "A12", "net": "DDR_DQ0"}` or
+        `{"pin": "B3", "nc": true}`. For each net a short stub wire leaves the
+        pin straight away from the body and ends in a label; for `nc` a
+        no-connect marker is placed on the pin. Everything is validated first;
+        on any error nothing is written.
+
+        `scope` sets the label kind for all connections (override per item
+        with its own `scope`): `local` (sheet-scoped), `global` (same net on
+        every sheet), or `hierarchical` (exposes the net to the parent sheet;
+        only valid on a sub-sheet). `shape` applies to global/hierarchical.
+        `unit` restricts to one placed unit of a multi-unit part.
+        """
+        if scope == "hierarchical" or any(
+            c.get("scope") == "hierarchical" for c in connections
+        ):
+            if state.get_active_sheet_filename() is None:
+                raise RuntimeError("hierarchical labels belong on a sub-sheet")
+        tree, path = _load_active_schematic()
+        plan = sch_connect.plan_connections(
+            tree, reference, connections, unit=unit,
+            default_scope=scope, default_shape=shape,
+        )
+        counts = sch_connect.apply_plan(tree, plan, stub_mm)
+        backup = _save_with_backup(tree, path)
+        return {
+            "reference": reference,
+            **counts,
+            "sheet": state.get_active_sheet_filename() or "root",
             "backup": str(backup) if backup else None,
         }
 
