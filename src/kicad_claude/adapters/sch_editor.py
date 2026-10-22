@@ -144,9 +144,25 @@ def set_symbol_field(
     return created
 
 
-def find_symbol_by_reference(tree: list, reference: str) -> list | None:
-    for s_node in iter_instance_symbols(tree):
-        if get_symbol_property(s_node, "Reference") == reference:
+def symbol_unit(symbol_node: list) -> int:
+    """The `(unit N)` of a placed symbol (1 when absent)."""
+    u = find_child(symbol_node, "unit")
+    return int(u[1]) if u is not None and len(u) >= 2 else 1
+
+
+def find_symbols_by_reference(tree: list, reference: str) -> list[list]:
+    """All placed nodes sharing `reference` (one per unit of a multi-unit part)."""
+    return [
+        s_node for s_node in iter_instance_symbols(tree)
+        if get_symbol_property(s_node, "Reference") == reference
+    ]
+
+
+def find_symbol_by_reference(
+    tree: list, reference: str, unit: int | None = None
+) -> list | None:
+    for s_node in find_symbols_by_reference(tree, reference):
+        if unit is None or symbol_unit(s_node) == unit:
             return s_node
     return None
 
@@ -243,6 +259,7 @@ def build_symbol_instance(
     datasheet: str = "~",
     description: str = "",
     hide_reference: bool = False,
+    unit: int = 1,
 ) -> list:
     """Construct a new (symbol ...) instance node ready to inject into the schematic."""
     x_k, y_k = mcp_to_kicad_xy(x_mcp, y_mcp, page_h)
@@ -270,7 +287,7 @@ def build_symbol_instance(
                 sym("path"),
                 instance_path,
                 [sym("reference"), reference],
-                [sym("unit"), 1],
+                [sym("unit"), unit],
             ],
         ],
     ]
@@ -279,7 +296,7 @@ def build_symbol_instance(
         sym("symbol"),
         [sym("lib_id"), qualified_lib_id],
         [sym("at"), x_k, y_k, rotation_deg],
-        [sym("unit"), 1],
+        [sym("unit"), unit],
         [sym("exclude_from_sim"), sym("no")],
         [sym("in_bom"), sym("yes")],
         [sym("on_board"), sym("yes")],
@@ -300,6 +317,29 @@ def build_symbol_instance(
 # --------------------------------------------------------------------------- #
 
 
+def _check_unit_placement(
+    tree: list, reference: str, qualified_lib_id: str, unit: int, units: list[int]
+) -> list[list]:
+    """Validate a (reference, unit) placement; return the already-placed siblings."""
+    if unit not in units:
+        raise ValueError(f"unit {unit} not in symbol {qualified_lib_id!r} (units: {units})")
+    siblings = [] if reference.endswith("?") else find_symbols_by_reference(tree, reference)
+    for node in siblings:
+        lib_id = find_child(node, "lib_id")
+        if lib_id is None or lib_id[1] != qualified_lib_id:
+            raise ValueError(f"reference {reference!r} already exists")
+        if symbol_unit(node) == unit:
+            raise ValueError(f"reference {reference!r} unit {unit} already exists")
+    return siblings
+
+
+def _copy_fields_from(instance: list, sibling: list) -> None:
+    """Make every unit of a part carry the same field values (Value, MPN, ...)."""
+    for prop in find_children(sibling, "property"):
+        if len(prop) >= 3 and isinstance(prop[2], str):
+            set_symbol_field(instance, prop[1], prop[2])
+
+
 def add_symbol(
     tree: list,
     *,
@@ -315,6 +355,7 @@ def add_symbol(
     footprint: str = "",
     datasheet: str = "~",
     description: str = "",
+    unit: int = 1,
 ) -> list:
     """Inject a symbol into the schematic. Returns the new (symbol ...) node.
 
@@ -324,9 +365,15 @@ def add_symbol(
 
     Unannotated references (ending in `?`, e.g. `R?`) are explicitly allowed
     to repeat — they're meant to be resolved later by `annotate_schematic`.
+
+    Multi-unit parts: call once per `unit` with the SAME reference. The
+    instance lists only that unit's pins (plus any shared unit-0 pins), and
+    later units inherit the fields of the first one placed.
     """
-    if not reference.endswith("?") and find_symbol_by_reference(tree, reference) is not None:
-        raise ValueError(f"reference {reference!r} already exists")
+    lib_entry_def = make_lib_symbol_entry(sym_def_node, qualified_lib_id)
+    siblings = _check_unit_placement(
+        tree, reference, qualified_lib_id, unit, symbol_lib.unit_numbers(lib_entry_def)
+    )
 
     rot = normalize_rotation(rotation)
     page_h = page_height_mm(tree)
@@ -334,10 +381,9 @@ def add_symbol(
         instance_path = f"/{_schematic_uuid(tree)}"
 
     # Inject the lib symbol definition (idempotent on qualified id).
-    lib_entry_def = make_lib_symbol_entry(sym_def_node, qualified_lib_id)
     inject_lib_symbol(tree, lib_entry_def)
 
-    pins = collect_pin_numbers(lib_entry_def)
+    pins = unit_pin_numbers(lib_entry_def, unit)
     instance = build_symbol_instance(
         qualified_lib_id=qualified_lib_id,
         reference=reference,
@@ -354,23 +400,32 @@ def add_symbol(
         description=description,
         # Power symbols / virtual parts (#PWR, #FLG) keep their ref hidden, like KiCAD.
         hide_reference=is_power_symbol(lib_entry_def) or reference.startswith("#"),
+        unit=unit,
     )
+    if siblings:
+        _copy_fields_from(instance, siblings[0])
     autoplace_fields(instance, lib_entry_def)
     tree.append(instance)
     return instance
 
 
-def remove_symbol(tree: list, reference: str) -> bool:
-    """Remove the first symbol matching `reference`. Returns True if removed."""
-    for i, child in enumerate(tree):
-        if (
-            is_call(child, "symbol")
-            and find_child(child, "lib_id")
-            and get_symbol_property(child, "Reference") == reference
-        ):
-            tree.pop(i)
-            return True
-    return False
+def unit_pin_numbers(symbol_def_node: list, unit: int) -> list[str]:
+    """Pin numbers an instance of `unit` carries, without duplicates."""
+    seen: dict[str, None] = {}
+    for pin_node, _u in symbol_lib.pins_of_unit(symbol_def_node, unit):
+        seen.setdefault(_pin_id(pin_node)[0], None)
+    return list(seen)
+
+
+def remove_symbol(tree: list, reference: str, unit: int | None = None) -> bool:
+    """Remove `reference` (every placed unit, or only `unit`). True if any removed."""
+    doomed = [
+        n for n in find_symbols_by_reference(tree, reference)
+        if unit is None or symbol_unit(n) == unit
+    ]
+    for node in doomed:
+        tree[:] = [c for c in tree if c is not node]
+    return bool(doomed)
 
 
 def move_symbol(
@@ -379,9 +434,18 @@ def move_symbol(
     x_mm: float,
     y_mm: float,
     rotation: float | None = None,
+    unit: int | None = None,
 ) -> None:
-    """Set absolute position (and optionally rotation) of an existing symbol."""
-    s_node = find_symbol_by_reference(tree, reference)
+    """Set absolute position (and optionally rotation) of an existing symbol.
+
+    A multi-unit part has one node per unit, so `unit` is required for those.
+    """
+    placed = find_symbols_by_reference(tree, reference)
+    if len(placed) > 1 and unit is None:
+        raise ValueError(
+            f"{reference!r} has {len(placed)} placed units; pass unit= to pick one"
+        )
+    s_node = find_symbol_by_reference(tree, reference, unit)
     if s_node is None:
         raise KeyError(f"no symbol with reference {reference!r}")
     page_h = page_height_mm(tree)
@@ -857,17 +921,21 @@ def _lib_to_world(lx: float, ly: float, rot: float) -> tuple[float, float]:
     return rx, -ry
 
 
-def _draw_units(symbol_def_node: list):
-    """Yield the symbol def and its sub-units drawn for unit 1, body style 1."""
+def _draw_units(symbol_def_node: list, unit: int = 1):
+    """Yield the symbol def and its sub-units drawn for `unit`, body style 1."""
     yield symbol_def_node
     for child in symbol_def_node[2:]:
         if is_call(child, "symbol") and len(child) >= 2 and isinstance(child[1], str):
             parts = child[1].rsplit("_", 2)
-            if len(parts) == 3 and parts[1] in ("0", "1") and parts[2] in ("0", "1"):
+            if (
+                len(parts) == 3
+                and parts[1] in ("0", str(unit))
+                and parts[2] in ("0", "1")
+            ):
                 yield child
 
 
-def _symbol_local_points(symbol_def_node: list) -> list[tuple[float, float]]:
+def _symbol_local_points(symbol_def_node: list, unit: int = 1) -> list[tuple[float, float]]:
     """Outline points (lib coords) of body graphics and pins, for the bbox."""
     pts: list[tuple[float, float]] = []
 
@@ -876,8 +944,8 @@ def _symbol_local_points(symbol_def_node: list) -> list[tuple[float, float]]:
             return None
         return float(node[1]), float(node[2])
 
-    for unit in _draw_units(symbol_def_node):
-        for item in unit[1:]:
+    for part in _draw_units(symbol_def_node, unit):
+        for item in part[1:]:
             h = head_of(item)
             if h == "rectangle":
                 pts += [p for p in (_xy(find_child(item, "start")), _xy(find_child(item, "end"))) if p]
@@ -901,10 +969,10 @@ def _symbol_local_points(symbol_def_node: list) -> list[tuple[float, float]]:
     return pts
 
 
-def _pin_sides(symbol_def_node: list, rot: float) -> set[str]:
+def _pin_sides(symbol_def_node: list, rot: float, unit: int = 1) -> set[str]:
     """World sides ({right, top, left, bottom}) that have pins sticking out."""
     sides = set()
-    for pin_node, _unit in _iter_pins(symbol_def_node):
+    for pin_node, _unit in symbol_lib.pins_of_unit(symbol_def_node, unit):
         # A pin's angle points from its tip into the body; outward is opposite.
         outward = int(round(_pin_local_at(pin_node)[2] + 180 + rot)) % 360
         if outward in _SIDE_BY_OUTWARD:
@@ -950,7 +1018,8 @@ def autoplace_fields(s_node: list, symbol_def_node: list) -> None:
             p_at[3] = float(lib_at[3]) if len(lib_at) >= 4 else 0
         return
 
-    world = [_lib_to_world(x, y, rot) for x, y in _symbol_local_points(symbol_def_node)]
+    unit = symbol_unit(s_node)
+    world = [_lib_to_world(x, y, rot) for x, y in _symbol_local_points(symbol_def_node, unit)]
     if not world:
         world = [(-1.27, -1.27), (1.27, 1.27)]
     left, right = min(p[0] for p in world), max(p[0] for p in world)
@@ -960,7 +1029,7 @@ def autoplace_fields(s_node: list, symbol_def_node: list) -> None:
         p for p in (_find_property(s_node, n) for n in ("Reference", "Value"))
         if p is not None and not _is_hidden(p)
     ]
-    sides = _pin_sides(symbol_def_node, rot)
+    sides = _pin_sides(symbol_def_node, rot, unit)
     side = next((sd for sd in ("right", "top", "bottom", "left") if sd not in sides), "top")
     n = len(fields)
 
@@ -1050,44 +1119,28 @@ def _pin_id(pin_node: list) -> tuple[str, str]:
     return number, name
 
 
-def list_pins_for_symbol(tree: list, reference: str) -> list[dict]:
-    """List pins of a placed symbol with their absolute positions in MCP coords."""
-    s_node = find_symbol_by_reference(tree, reference)
-    if s_node is None:
-        raise KeyError(f"no symbol with reference {reference!r}")
-    lib_id_node = find_child(s_node, "lib_id")
-    if not lib_id_node or len(lib_id_node) < 2:
-        raise ValueError(f"symbol {reference!r} has no lib_id")
-    qualified = lib_id_node[1]
-    sym_def = find_lib_symbol_def(tree, qualified)
-    if sym_def is None:
-        raise KeyError(
-            f"lib_symbols entry {qualified!r} missing — was the schematic written by us?"
-        )
-
+def _unit_pin_entries(
+    tree: list, s_node: list, sym_def: list, reference: str, page_h: float
+) -> list[dict]:
+    """Pins of one placed unit with absolute MCP positions."""
     at = find_child(s_node, "at")
     if not at or len(at) < 4:
         raise ValueError(f"symbol {reference!r} has malformed (at ...)")
     sx, sy, srot = float(at[1]), float(at[2]), float(at[3])
-    page_h = page_height_mm(tree)
-
+    unit = symbol_unit(s_node)
     out = []
-    for pin_node, _unit in _iter_pins(sym_def):
+    for pin_node, _u in symbol_lib.pins_of_unit(sym_def, unit):
         lx, ly, lrot = _pin_local_at(pin_node)
-        # KiCAD rotation is CCW. Library coords have Y down; instance rotation
-        # is also applied in those coords.
+        # KiCAD rotation is CCW and the library Y axis points up; the file's
+        # schematic Y points down, hence the flip on the way out.
         rx, ry = rotate_xy(lx, ly, srot)
-        # In KiCAD, pin local Y has the same orientation as schematic Y (both
-        # "down"), but rotate_xy uses math convention (Y up). Since both
-        # systems are consistent, rotate_xy + add gives the right result.
-        wx_kicad = sx + rx
-        wy_kicad = sy - ry  # flip because KiCAD Y is down vs math Y up
-        mcp_x, mcp_y = wx_kicad, page_h - wy_kicad
+        mcp_x, mcp_y = sx + rx, page_h - (sy - ry)
         number, name = _pin_id(pin_node)
         out.append(
             {
                 "number": number,
                 "name": name,
+                "unit": unit,
                 "position_mm": [round_mm(mcp_x), round_mm(mcp_y)],
                 "angle": (lrot + srot) % 360,
             }
@@ -1095,14 +1148,47 @@ def list_pins_for_symbol(tree: list, reference: str) -> list[dict]:
     return out
 
 
-def get_pin_position(tree: list, reference: str, pin_number: str) -> tuple[float, float]:
+def list_pins_for_symbol(
+    tree: list, reference: str, unit: int | None = None
+) -> list[dict]:
+    """List pins of a placed symbol with their absolute positions in MCP coords.
+
+    For a multi-unit part this covers every placed unit (or just `unit`);
+    unplaced units have no position and are not listed.
+    """
+    nodes = [
+        n for n in find_symbols_by_reference(tree, reference)
+        if unit is None or symbol_unit(n) == unit
+    ]
+    if not nodes:
+        raise KeyError(f"no symbol with reference {reference!r}")
+    page_h = page_height_mm(tree)
+    out: list[dict] = []
+    for s_node in nodes:
+        lib_id_node = find_child(s_node, "lib_id")
+        if not lib_id_node or len(lib_id_node) < 2:
+            raise ValueError(f"symbol {reference!r} has no lib_id")
+        sym_def = find_lib_symbol_def(tree, lib_id_node[1])
+        if sym_def is None:
+            raise KeyError(
+                f"lib_symbols entry {lib_id_node[1]!r} missing — was the schematic written by us?"
+            )
+        out += _unit_pin_entries(tree, s_node, sym_def, reference, page_h)
+    return out
+
+
+def get_pin_position(
+    tree: list, reference: str, pin_number: str, unit: int | None = None
+) -> tuple[float, float]:
     """Return (x, y) in MCP coords for a specific pin of a placed symbol."""
-    pins = list_pins_for_symbol(tree, reference)
+    pins = list_pins_for_symbol(tree, reference, unit)
     for p in pins:
         if p["number"] == pin_number:
             return tuple(p["position_mm"])  # type: ignore[return-value]
     raise KeyError(
-        f"pin {pin_number!r} not found on {reference!r}; available: {[p['number'] for p in pins]}"
+        f"pin {pin_number!r} not found on {reference!r}"
+        f"{'' if unit is None else f' unit {unit}'}; "
+        f"available: {[p['number'] for p in pins]}"
     )
 
 

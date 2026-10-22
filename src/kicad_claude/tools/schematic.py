@@ -21,7 +21,7 @@ from pathlib import Path
 from kicad_claude import state
 from kicad_claude.adapters import annotation
 from kicad_claude.adapters import sch_editor as ed
-from kicad_claude.adapters import sch_io
+from kicad_claude.adapters import sch_io, symbol_lib
 from kicad_claude.templates.blank import write_blank_schematic
 from kicad_claude.tools import library as lib_tools
 
@@ -146,6 +146,7 @@ def register(mcp) -> None:
         x_mm: float,
         y_mm: float,
         rotation: float = 0,
+        unit: int = 1,
     ) -> dict:
         """Add a symbol from the indexed KiCAD libraries to the active schematic.
 
@@ -155,8 +156,12 @@ def register(mcp) -> None:
             value: human-visible value ("10k", "100uF", ...)
             x_mm, y_mm: position, MCP coords (Y up)
             rotation: 0/90/180/270 degrees CCW
+            unit: which unit of a multi-unit part to place. Call again with
+                the same `reference` and the next `unit` to place the others
+                (they inherit the first unit's fields; `value` is then ignored).
 
-        Returns the placed symbol's identity. Refuses if `reference` already exists.
+        Returns the placed symbol's identity. Refuses if `reference` already
+        exists (except for a different unit of the same part).
         """
         tree, path = _load_active_schematic()
         lib_path, sym_name, meta = _resolve_lib_symbol(lib_id)
@@ -177,6 +182,7 @@ def register(mcp) -> None:
             footprint=meta.get("default_footprint", ""),
             datasheet=meta.get("datasheet", "~"),
             description=meta.get("description", ""),
+            unit=unit,
         )
         backup = _save_with_backup(tree, path)
         logger.info(
@@ -189,19 +195,21 @@ def register(mcp) -> None:
             "value": value,
             "position_mm": [x_mm, y_mm],
             "rotation": rotation,
+            "unit": unit,
+            "units_in_symbol": symbol_lib.unit_numbers(sym_def),
             "pin_count": meta.get("pin_count", 0),
             "sheet": state.get_active_sheet_filename() or "root",
             "backup": str(backup) if backup else None,
         }
 
     @mcp.tool()
-    def remove_symbol(reference: str) -> dict:
-        """Remove the symbol with the given reference from the active schematic."""
+    def remove_symbol(reference: str, unit: int | None = None) -> dict:
+        """Remove a symbol from the active schematic (all its units, or only `unit`)."""
         tree, path = _load_active_schematic()
-        if not ed.remove_symbol(tree, reference):
+        if not ed.remove_symbol(tree, reference, unit):
             raise KeyError(f"no symbol with reference {reference!r}")
         backup = _save_with_backup(tree, path)
-        return {"removed": reference, "backup": str(backup) if backup else None}
+        return {"removed": reference, "unit": unit, "backup": str(backup) if backup else None}
 
     @mcp.tool()
     def move_symbol(
@@ -209,13 +217,15 @@ def register(mcp) -> None:
         x_mm: float,
         y_mm: float,
         rotation: float | None = None,
+        unit: int | None = None,
     ) -> dict:
         """Move (and optionally rotate) an existing symbol. Absolute positioning.
 
         Reference/Value move with the symbol; a rotation change re-places them.
+        `unit` is required when the part has several units placed.
         """
         tree, path = _load_active_schematic()
-        ed.move_symbol(tree, reference, x_mm, y_mm, rotation)
+        ed.move_symbol(tree, reference, x_mm, y_mm, rotation, unit)
         backup = _save_with_backup(tree, path)
         return {
             "reference": reference,
@@ -238,16 +248,18 @@ def register(mcp) -> None:
         Renaming the Reference this way is refused if the new one is taken.
         """
         tree, path = _load_active_schematic()
-        s_node = ed.find_symbol_by_reference(tree, reference)
-        if s_node is None:
+        nodes = ed.find_symbols_by_reference(tree, reference)
+        if not nodes:
             raise KeyError(f"no symbol with reference {reference!r}")
         if field == "Reference" and value != reference and not value.endswith("?"):
             if ed.find_symbol_by_reference(tree, value) is not None:
                 raise ValueError(f"reference {value!r} already exists")
-        created = ed.set_symbol_field(s_node, field, value, visible)
-        if field == "Reference":
-            # KiCAD reads the reference from (instances ...), not just the property.
-            annotation._update_instance_reference(s_node, value)
+        created = False
+        for s_node in nodes:  # every unit of a multi-unit part carries the field
+            created = ed.set_symbol_field(s_node, field, value, visible) or created
+            if field == "Reference":
+                # KiCAD reads the reference from (instances ...), not just the property.
+                annotation._update_instance_reference(s_node, value)
         backup = _save_with_backup(tree, path)
         return {
             "reference": value if field == "Reference" else reference,
@@ -348,10 +360,10 @@ def register(mcp) -> None:
         }
 
     @mcp.tool()
-    def add_no_connect(reference: str, pin: str) -> dict:
+    def add_no_connect(reference: str, pin: str, unit: int | None = None) -> dict:
         """Mark a pin as no-connect by placing a NC marker at its position."""
         tree, path = _load_active_schematic()
-        x, y = ed.get_pin_position(tree, reference, pin)
+        x, y = ed.get_pin_position(tree, reference, pin, unit)
         ed.add_no_connect(tree, x, y)
         backup = _save_with_backup(tree, path)
         return {
@@ -362,16 +374,20 @@ def register(mcp) -> None:
         }
 
     @mcp.tool()
-    def list_pins(reference: str) -> list[dict]:
-        """List pins of a placed symbol with their absolute positions (MCP coords)."""
+    def list_pins(reference: str, unit: int | None = None) -> list[dict]:
+        """List pins of a placed symbol with their absolute positions (MCP coords).
+
+        For multi-unit parts every placed unit is listed (each pin has a
+        `unit` field); pass `unit` to restrict to one.
+        """
         tree, _ = _load_active_schematic()
-        return ed.list_pins_for_symbol(tree, reference)
+        return ed.list_pins_for_symbol(tree, reference, unit)
 
     @mcp.tool()
-    def get_pin_position(reference: str, pin: str) -> dict:
+    def get_pin_position(reference: str, pin: str, unit: int | None = None) -> dict:
         """Return absolute (x, y) of one pin in MCP coordinates."""
         tree, _ = _load_active_schematic()
-        x, y = ed.get_pin_position(tree, reference, pin)
+        x, y = ed.get_pin_position(tree, reference, pin, unit)
         return {"reference": reference, "pin": pin, "position_mm": [x, y]}
 
     # ----- Buses (visual grouping of multiple nets) ----------------------- #

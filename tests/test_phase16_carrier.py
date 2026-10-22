@@ -200,3 +200,140 @@ def test_multi_sheet_power_symbols_pass_annotation_in_kicad(mcp, blank_project):
     ]
     assert run.returncode == 0
     assert noise == []  # any annotation warning would be printed here
+
+
+# ===== multi-unit symbols ================================================== #
+
+
+def netlist_pins(sch_path: Path) -> dict[str, set[tuple[str, str]]]:
+    """Export a kicadxml netlist and return {net name: {(ref, pin)}}."""
+    import re
+
+    out = sch_path.with_suffix(".xml")
+    subprocess.run(
+        [str(KICAD_CLI), "sch", "export", "netlist", "--format", "kicadxml",
+         "-o", str(out), str(sch_path)],
+        capture_output=True, text=True, timeout=120, check=False,
+    )
+    text = out.read_text()
+    nets = {}
+    for name, body in re.findall(r'<net code="\d+" name="([^"]+)"[^>]*>(.*?)</net>', text, re.S):
+        nets[name] = set(re.findall(r'<node ref="([^"]+)" pin="([^"]+)"', body))
+    return nets
+
+
+def place_quad(server, ref="U1", **kw):
+    return call(server, "add_symbol", lib_id="UnitLib:Quad", reference=ref,
+                value="Quad", **kw)
+
+
+def test_place_second_unit_of_same_reference(mcp, blank_project):
+    first = place_quad(mcp, x_mm=76.2, y_mm=101.6, unit=1)
+    second = place_quad(mcp, x_mm=127, y_mm=101.6, unit=2)
+    assert (first["unit"], second["unit"]) == (1, 2)
+    assert first["units_in_symbol"] == [1, 2]
+    tree = sch_io.parse_file(blank_project["sch"])
+    nodes = ed.find_symbols_by_reference(tree, "U1")
+    assert sorted(ed.symbol_unit(n) for n in nodes) == [1, 2]
+
+
+def test_instance_lists_only_its_units_pins(mcp, blank_project):
+    place_quad(mcp, x_mm=76.2, y_mm=101.6, unit=1)
+    place_quad(mcp, x_mm=127, y_mm=101.6, unit=2)
+    tree = sch_io.parse_file(blank_project["sch"])
+    by_unit = {
+        ed.symbol_unit(n): sorted(p[1] for p in sch_io.find_children(n, "pin"))
+        for n in ed.find_symbols_by_reference(tree, "U1")
+    }
+    assert by_unit == {1: ["1", "2", "8"], 2: ["3", "4", "8"]}
+
+
+def test_same_unit_twice_is_refused(mcp):
+    place_quad(mcp, x_mm=76.2, y_mm=101.6, unit=1)
+    with pytest.raises(ValueError, match="unit 1 already exists"):
+        place_quad(mcp, x_mm=127, y_mm=101.6, unit=1)
+
+
+def test_unknown_unit_is_refused(mcp):
+    with pytest.raises(ValueError, match="unit 3 not in symbol"):
+        place_quad(mcp, x_mm=76.2, y_mm=101.6, unit=3)
+
+
+def test_other_lib_id_cannot_reuse_reference(mcp):
+    place_quad(mcp, x_mm=76.2, y_mm=101.6, unit=1)
+    with pytest.raises(ValueError, match="already exists"):
+        call(mcp, "add_symbol", lib_id="MiniLib:Resistor", reference="U1",
+             value="10k", x_mm=127, y_mm=101.6)
+
+
+def test_later_unit_inherits_fields_of_first(mcp, blank_project):
+    place_quad(mcp, x_mm=76.2, y_mm=101.6, unit=1)
+    call(mcp, "set_symbol_field", reference="U1", field="MPN", value="ABC-123")
+    place_quad(mcp, x_mm=127, y_mm=101.6, unit=2)
+    tree = sch_io.parse_file(blank_project["sch"])
+    mpns = {ed.get_symbol_property(n, "MPN") for n in ed.find_symbols_by_reference(tree, "U1")}
+    assert mpns == {"ABC-123"}
+
+
+def test_set_field_updates_every_unit(mcp, blank_project):
+    place_quad(mcp, x_mm=76.2, y_mm=101.6, unit=1)
+    place_quad(mcp, x_mm=127, y_mm=101.6, unit=2)
+    call(mcp, "set_symbol_field", reference="U1", field="Footprint", value="Pkg:SOIC-8")
+    tree = sch_io.parse_file(blank_project["sch"])
+    fps = {ed.get_symbol_property(n, "Footprint") for n in ed.find_symbols_by_reference(tree, "U1")}
+    assert fps == {"Pkg:SOIC-8"}
+
+
+def test_list_pins_reports_unit_and_filters(mcp):
+    place_quad(mcp, x_mm=76.2, y_mm=101.6, unit=1)
+    place_quad(mcp, x_mm=127, y_mm=101.6, unit=2)
+    both = call(mcp, "list_pins", reference="U1")
+    assert {p["unit"] for p in both} == {1, 2}
+    only2 = call(mcp, "list_pins", reference="U1", unit=2)
+    assert sorted(p["number"] for p in only2) == ["3", "4", "8"]
+    # pin 3 sits on unit 2's own body, 50.8 mm to the right of unit 1
+    p3 = call(mcp, "get_pin_position", reference="U1", pin="3")
+    assert p3["position_mm"][0] == pytest.approx(127 - 7.62)
+
+
+def test_move_requires_unit_when_several_are_placed(mcp):
+    place_quad(mcp, x_mm=76.2, y_mm=101.6, unit=1)
+    place_quad(mcp, x_mm=127, y_mm=101.6, unit=2)
+    with pytest.raises(ValueError, match="pass unit="):
+        call(mcp, "move_symbol", reference="U1", x_mm=50.8, y_mm=50.8)
+    call(mcp, "move_symbol", reference="U1", x_mm=50.8, y_mm=50.8, unit=2)
+    pins = call(mcp, "list_pins", reference="U1", unit=2)
+    assert min(p["position_mm"][0] for p in pins) == pytest.approx(50.8 - 7.62)
+
+
+def test_remove_drops_all_units_or_one(mcp, blank_project):
+    place_quad(mcp, x_mm=76.2, y_mm=101.6, unit=1)
+    place_quad(mcp, x_mm=127, y_mm=101.6, unit=2)
+    call(mcp, "remove_symbol", reference="U1", unit=2)
+    tree = sch_io.parse_file(blank_project["sch"])
+    assert [ed.symbol_unit(n) for n in ed.find_symbols_by_reference(tree, "U1")] == [1]
+    call(mcp, "remove_symbol", reference="U1")
+    tree = sch_io.parse_file(blank_project["sch"])
+    assert ed.find_symbols_by_reference(tree, "U1") == []
+
+
+@needs_kicad
+@pytest.mark.parametrize("rotation", [0, 90, 180, 270])
+def test_unit_pin_positions_connect_in_kicad(mcp, blank_project, rotation):
+    place_quad(mcp, x_mm=76.2, y_mm=101.6, unit=1, rotation=rotation)
+    place_quad(mcp, x_mm=152.4, y_mm=101.6, unit=2, rotation=rotation)
+    for p in call(mcp, "list_pins", reference="U1"):
+        if p["number"] != "8":
+            call(mcp, "add_label", net_name=f"N{p['number']}",
+                 x_mm=p["position_mm"][0], y_mm=p["position_mm"][1])
+    nets = netlist_pins(blank_project["sch"])
+    for n in ("1", "2", "3", "4"):
+        assert nets[f"/N{n}"] == {("U1", n)}
+
+
+@needs_kicad
+def test_both_units_placed_leaves_no_missing_unit_warning(mcp, blank_project):
+    place_quad(mcp, x_mm=76.2, y_mm=101.6, unit=1)
+    assert erc_counts(blank_project["sch"])["missing_unit"] == 1
+    place_quad(mcp, x_mm=152.4, y_mm=101.6, unit=2)
+    assert erc_counts(blank_project["sch"])["missing_unit"] == 0
