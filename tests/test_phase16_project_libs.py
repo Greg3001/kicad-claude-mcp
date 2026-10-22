@@ -11,7 +11,7 @@ from kicad_claude.adapters import sch_io
 from kicad_claude.adapters import vendor_import as vi
 from kicad_claude.indexer import project_libs
 
-from .carrier_support import call
+from .carrier_support import call, erc_counts, needs_kicad
 
 PINS = [  # explicit coordinates: these tests are about libraries, not layout
     {"number": str(i), "name": f"P{i}", "x_mm": -7.62, "y_mm": 5.08 - 2.54 * i,
@@ -100,3 +100,49 @@ def test_unknown_symbol_still_reports_clearly(mcp):
     with pytest.raises(KeyError, match="unknown lib_id"):
         call(mcp, "add_symbol", lib_id="som:NOPE", reference="J1", value="x",
              x_mm=76.2, y_mm=101.6)
+
+
+# ===== vendor imports ======================================================== #
+
+
+def vendor_zip(tmp_path: Path, datasheet: str) -> Path:
+    import zipfile
+
+    path = tmp_path / "ACME.zip"
+    with zipfile.ZipFile(path, "w") as z:
+        z.writestr("KiCad/ACME.kicad_sym", f"""(kicad_symbol_lib (version 20251024) (generator "snapeda")
+(symbol "ACME"
+  (property "Reference" "U" (at 0 0 0) (effects (font (size 1.27 1.27))))
+  (property "Value" "ACME" (at 0 0 0) (effects (font (size 1.27 1.27))))
+  (property "Footprint" "" (at 0 0 0) (hide yes) (effects (font (size 1.27 1.27))))
+  (property "Datasheet" "{datasheet}" (at 0 0 0) (hide yes) (effects (font (size 1.27 1.27))))
+  (property "Description" "" (at 0 0 0) (hide yes) (effects (font (size 1.27 1.27))))
+  (symbol "ACME_1_1"
+    (pin passive line (at -7.62 0 0) (length 2.54)
+      (name "A" (effects (font (size 1.27 1.27)))) (number "1" (effects (font (size 1.27 1.27)))))
+  )
+))""")
+    return path
+
+
+def test_vendor_import_turns_tilde_datasheet_into_empty(tmp_path: Path, blank_project):
+    proj = blank_project["sch"].parent
+    vi.import_zip(vendor_zip(tmp_path, "~"), proj, target_lib="vendor")
+    lib = sch_io.parse_file(proj / "lib" / "vendor.kicad_sym")
+    sym_node = sch_io.find_child(lib, "symbol")
+    assert ed.get_symbol_property(sym_node, "Datasheet") == ""
+
+
+def test_vendor_import_keeps_real_datasheet_urls(tmp_path: Path, blank_project):
+    proj = blank_project["sch"].parent
+    vi.import_zip(vendor_zip(tmp_path, "https://example.com/a.pdf"), proj, target_lib="vendor")
+    sym_node = sch_io.find_child(sch_io.parse_file(proj / "lib" / "vendor.kicad_sym"), "symbol")
+    assert ed.get_symbol_property(sym_node, "Datasheet") == "https://example.com/a.pdf"
+
+
+@needs_kicad
+def test_imported_symbol_matches_library_copy_in_kicad(tmp_path: Path, mcp, blank_project):
+    vi.import_zip(vendor_zip(tmp_path, "~"), blank_project["sch"].parent, target_lib="vendor")
+    call(mcp, "add_symbol", lib_id="vendor:ACME", reference="U1", value="ACME",
+         x_mm=101.6, y_mm=101.6)
+    assert erc_counts(blank_project["sch"])["lib_symbol_mismatch"] == 0

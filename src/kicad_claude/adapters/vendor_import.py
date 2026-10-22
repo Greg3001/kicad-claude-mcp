@@ -110,6 +110,17 @@ def update_fp_lib_table(project_dir: Path, lib_name: str) -> Path:
 # --------------------------------------------------------------------------- #
 
 
+def _normalize_datasheet(sym_node: list) -> None:
+    """Turn a literal "~" datasheet into "" (what KiCad 10 writes for none).
+
+    With "~" in the library file, ERC reports lib_symbol_mismatch against the
+    copy embedded in the schematic, because the two loaders disagree on it.
+    """
+    for prop in find_children(sym_node, "property"):
+        if len(prop) >= 3 and prop[1] == "Datasheet" and prop[2] == "~":
+            prop[2] = ""
+
+
 def _merge_symbol_lib(target_path: Path, sources: list[Path]) -> int:
     """Merge symbol definitions from `sources` into `target_path`.
 
@@ -146,6 +157,7 @@ def _merge_symbol_lib(target_path: Path, sources: list[Path]) -> int:
             name = sym_node[1] if len(sym_node) >= 2 and isinstance(sym_node[1], str) else None
             if not name or name in existing_names:
                 continue
+            _normalize_datasheet(sym_node)
             target.append(sym_node)
             existing_names.add(name)
             added += 1
