@@ -1,11 +1,11 @@
 # kicad-claude-mcp
 
 > Design KiCAD PCBs from natural language. An MCP server that gives Claude
-> Code (or any MCP client) **105 tools** to drive a complete PCB workflow —
+> Code (or any MCP client) **115 tools** to drive a complete PCB workflow —
 > schematic capture, library management, PCB layout, autorouting, manufacturing
 > outputs, signal-integrity calculations, RF design, and more.
 
-**105 MCP tools · 240 tests passing · 16 phases · headless from idea to gerbers**
+**115 MCP tools · 361 tests passing · 16 phases · headless from idea to gerbers**
 
 The server edits `.kicad_sch` / `.kicad_pcb` / `.kicad_pro` files directly.
 You drive it via Claude Code; you open KiCAD only to review the result.
@@ -93,11 +93,12 @@ Add to `~/.claude/settings.json`:
 
 ### Schematic capture
 
-- **Symbol placement & connections**: `add_symbol`, `add_wire`, `add_junction`, `add_label`, `add_power_symbol`, `add_no_connect`, `move_symbol`, `remove_symbol`, `set_symbol_field`, `get_pin_position`, `list_pins`
-- **Hierarchical sheets**: `add_sheet`, `set_active_sheet`, `add_hierarchical_label`, `add_sheet_pin`, `list_sheets` — proper multi-level designs
+- **Symbol placement & connections**: `add_symbol` (multi-unit parts: one call per `unit`; `fields=` for MPN / Manufacturer / Rad Grade at place time), `add_wire`, `add_junction`, `add_label`, `add_global_label`, `add_power_symbol` (any rail name), `add_no_connect`, `move_symbol`, `remove_symbol`, `set_symbol_field`, `set_dnp`, `add_text_note`, `get_pin_position`, `list_pins`
+- **Bulk capture**: `connect_pins` wires a whole connector (`{pin, net | nc}` list, local / global / hierarchical labels) in one call; `add_items` draws wires, labels and notes in one write; `set_sheet_paper` sets A5..A0 / User paper before drawing
+- **Hierarchical sheets**: `add_sheet`, `set_active_sheet`, `add_hierarchical_label`, `add_sheet_pin`, `sync_sheet_pins` (pins from the child's labels), `label_sheet_pins`, `list_sheets` — one level of sub-sheets under the root
 - **Buses**: `add_bus`, `add_bus_entry`, `add_bus_alias` — visual grouping of address/data lines
 - **Annotation**: `annotate_schematic` — auto-numbers `R?` → `R1, R2, ...` across all sheets
-- **Custom symbols**: `create_symbol` with full pin specifications
+- **Custom symbols**: `create_symbol` with per-pin `unit` / `side`; pins without coordinates are laid out automatically, so a 480-pin, 4-unit connector is one call. Project libraries (`<project>/lib`, `sym-lib-table`) are placeable and searchable immediately
 
 ### Library management
 
@@ -197,7 +198,7 @@ enrich_bom_with_sourcing  sources="digikey,mouser"
 ```
 kicad-claude-mcp/
 ├── server.py                          # FastMCP entry point — registers all tools
-├── pyproject.toml                     # uv project + 105 tool surface
+├── pyproject.toml                     # uv project + 115 tool surface
 ├── .env.example                       # API keys + path overrides
 ├── src/kicad_claude/
 │   ├── tools/                         # MCP tools (one file per phase)
@@ -258,7 +259,9 @@ diverged from the original spec.
 - **Schematic grid.** The schematic Y flip is around the page height rounded down to 2.54 mm (A4: 208.28 mm, not 210), so MCP coordinates that are multiples of 1.27 mm land on KiCAD's connection grid. Off-grid inputs show up in `run_erc` as `endpoint_off_grid` warnings.
 - **Freerouting needs Java 21+.** Freerouting 2.2.x requires Java 25; we ship 2.1.0 because it works on Java 21–24.
 - **Closed-form analyses are estimators.** Impedance / current / crosstalk / thermal / return-path tools give ballpark numbers good for early design. Production hardware needs Ansys / Sonnet / Saturn PCB / Icepak for sign-off.
-- **Symbols with `extends`** (like `Device:R_Small` extending `Device:R`) currently inject only the extending symbol; the base isn't pulled. Use the canonical name (`Device:R`) for now.
+- **Page size.** The default A4 sheet silently loses pins that fall off the page (ERC ignores them). Call `set_sheet_paper` on an empty sheet first; it refuses a sheet that already has content because the Y flip depends on the page height.
+- **Net names carry the sheet path.** A local label on the root is `/NAME`, on sub-sheet `som` it is `/som/NAME`; only global labels and power symbols are bare. Use `add_global_label` / `connect_pins(scope="global")` for nets that cross sheets. `assign_net_class` stores both `NAME` and `*/NAME`; nets that live only on a sub-sheet showed class `Default` in kicad-cli's netlist even with matching patterns (KiCad 10.0.1), so give nets that need a class a global label.
+- **ERC is not a pin census.** KiCad 10.0.1's ERC skips a few percent of floating pins in a dense symbol, at positions that depend on where the symbol sits. Count pins with a netlist export when it matters.
 
 ---
 
