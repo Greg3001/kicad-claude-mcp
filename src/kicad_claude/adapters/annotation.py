@@ -18,7 +18,7 @@ import re
 from typing import Iterable
 
 from kicad_claude.adapters import sch_editor as ed
-from kicad_claude.adapters import sch_io
+from kicad_claude.adapters import sch_io, symbol_lib
 
 _REF_PATTERN = re.compile(r"([A-Za-z#_]+)(\d+)$")
 
@@ -78,15 +78,18 @@ def annotate_tree(
         targets.sort(key=lambda s: _symbol_position(s)[::-1])
 
     assignments: list[dict] = []
+    groups = _UnitGroups(tree)
     for s in targets:
         ref = ed.get_symbol_property(s, "Reference") or ""
         prefix = ref[:-1]  # strip trailing '?'
         if not prefix:
             # Just '?' alone — skip; nothing meaningful we can do.
             continue
-        next_num = counters.get(prefix, 0) + 1
-        counters[prefix] = next_num
-        new_ref = f"{prefix}{next_num}"
+        new_ref = groups.reference_for(s, prefix)
+        if new_ref is None:
+            next_num = counters.get(prefix, 0) + 1
+            counters[prefix] = next_num
+            new_ref = groups.open_group(s, prefix, f"{prefix}{next_num}")
 
         # Update the Reference property AND the (instances ... (path ... (reference ...)))
         ed.set_symbol_property(s, "Reference", new_ref)
@@ -94,6 +97,47 @@ def annotate_tree(
 
         assignments.append({"old": ref, "new": new_ref})
     return assignments
+
+
+class _UnitGroups:
+    """Keeps the units of one multi-unit part under a single reference.
+
+    Unannotated `U?` nodes of the same library symbol are taken in reading
+    order: a node joins the part still missing its unit, otherwise it starts a
+    new part. Single-unit symbols always start a new part.
+    """
+
+    def __init__(self, tree: list) -> None:
+        self._tree = tree
+        self._open: dict[tuple[str, str], tuple[str, set[int], int]] = {}
+
+    def _lib_id(self, node: list) -> str:
+        lib_id = sch_io.find_child(node, "lib_id")
+        return str(lib_id[1]) if lib_id else ""
+
+    def _unit_count(self, lib_id: str) -> int:
+        sym_def = ed.find_lib_symbol_def(self._tree, lib_id)
+        return len(symbol_lib.unit_numbers(sym_def)) if sym_def is not None else 1
+
+    def reference_for(self, node: list, prefix: str) -> str | None:
+        """The open part's reference when this node can be its next unit."""
+        key = (prefix, self._lib_id(node))
+        group = self._open.get(key)
+        unit = ed.symbol_unit(node)
+        if group is None or unit in group[1]:
+            return None
+        ref, used, total = group
+        used.add(unit)
+        if len(used) >= total:
+            del self._open[key]
+        return ref
+
+    def open_group(self, node: list, prefix: str, ref: str) -> str:
+        lib_id = self._lib_id(node)
+        total = self._unit_count(lib_id)
+        if total > 1:
+            self._open[(prefix, lib_id)] = (ref, {ed.symbol_unit(node)}, total)
+        return ref
 
 
 def _update_instance_reference(sym_node: list, new_ref: str) -> None:

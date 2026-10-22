@@ -81,3 +81,68 @@ def test_nothing_to_do_places_nothing(flags_mcp):
 def place_unit(mcp, unit, x, ref="U?"):
     call(mcp, "add_symbol", lib_id="UnitLib:Quad", reference=ref, value="Q",
          x_mm=x, y_mm=101.6, unit=unit)
+
+
+def refs_by_unit(blank_project):
+    from kicad_claude.adapters import sch_editor as ed
+    from kicad_claude.adapters import sch_io
+
+    tree = sch_io.parse_file(blank_project["sch"])
+    return sorted(
+        (ed.get_symbol_property(n, "Reference"), ed.symbol_unit(n))
+        for n in ed.iter_instance_symbols(tree)
+    )
+
+
+@pytest.fixture
+def sync_mcp(mcp):
+    from kicad_claude.tools import sync as sync_tools
+
+    sync_tools.register(mcp)
+    return mcp
+
+
+def test_annotation_keeps_units_of_one_part_together(sync_mcp, blank_project):
+    for unit, x in ((1, 50.8), (2, 76.2), (1, 101.6), (2, 127.0)):
+        place_unit(sync_mcp, unit, x)
+    call(sync_mcp, "annotate_schematic")
+    assert refs_by_unit(blank_project) == [("U1", 1), ("U1", 2), ("U2", 1), ("U2", 2)]
+
+
+def test_annotation_of_single_unit_parts_is_unchanged(sync_mcp, blank_project):
+    for x in (50.8, 76.2, 101.6):
+        call(sync_mcp, "add_symbol", lib_id="MiniLib:Resistor", reference="R?", value="1k",
+             x_mm=x, y_mm=101.6)
+    call(sync_mcp, "annotate_schematic")
+    assert [r for r, _ in refs_by_unit(blank_project)] == ["R1", "R2", "R3"]
+
+
+def test_annotation_continues_after_existing_numbers(sync_mcp, blank_project):
+    place_unit(sync_mcp, 1, 50.8, ref="U5")
+    place_unit(sync_mcp, 2, 76.2, ref="U5")
+    place_unit(sync_mcp, 1, 101.6)
+    place_unit(sync_mcp, 2, 127.0)
+    call(sync_mcp, "annotate_schematic")
+    assert refs_by_unit(blank_project) == [("U5", 1), ("U5", 2), ("U6", 1), ("U6", 2)]
+
+
+def test_a_part_whose_units_are_all_placed_does_not_swallow_the_next_part(sync_mcp, blank_project):
+    # two unit-1 nodes in a row cannot both belong to one two-unit part
+    place_unit(sync_mcp, 1, 50.8)
+    place_unit(sync_mcp, 1, 76.2)
+    call(sync_mcp, "annotate_schematic")
+    assert refs_by_unit(blank_project) == [("U1", 1), ("U2", 1)]
+
+
+@needs_kicad
+def test_annotated_multi_unit_part_is_one_component_in_kicad(sync_mcp, blank_project):
+    from .carrier_support import netlist_pins
+
+    place_unit(sync_mcp, 1, 76.2)
+    place_unit(sync_mcp, 2, 152.4)
+    call(sync_mcp, "annotate_schematic")
+    call(sync_mcp, "connect_pins", reference="U1", connections=[
+        {"pin": "1", "net": "A"}, {"pin": "3", "net": "B"}])
+    nets = netlist_pins(blank_project["sch"])
+    assert nets["/A"] == {("U1", "1")} and nets["/B"] == {("U1", "3")}
+    assert erc_counts(blank_project["sch"])["missing_unit"] == 0
