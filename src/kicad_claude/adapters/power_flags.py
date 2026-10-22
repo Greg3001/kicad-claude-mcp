@@ -28,13 +28,3 @@ def undriven_refs(erc_data: dict) -> list[tuple[str, str]]:
                     out.append((sheet.get("path", "/"), m.group(1)))
                     break
     return out
-
-
-def sheet_name_of(sheet_path: str) -> str | None:
-    """`/` -> None (the root); `/power/` -> `power`. Only one level is supported."""
-    parts = [p for p in sheet_path.split("/") if p]
-    if not parts:
-        return None
-    if len(parts) > 1:
-        raise ValueError(f"nested sheet path {sheet_path!r} is not supported")
-    return parts[0]

@@ -21,7 +21,7 @@ from pathlib import Path
 from kicad_claude import state
 from kicad_claude.adapters import annotation
 from kicad_claude.adapters import sch_editor as ed
-from kicad_claude.adapters import sch_connect, sch_io, sch_items, sch_sheets, symbol_lib
+from kicad_claude.adapters import sch_connect, sch_io, sch_items, sch_sheets, sheet_tree, symbol_lib
 from kicad_claude.utils import geometry
 from kicad_claude.templates.blank import write_blank_schematic
 from kicad_claude.tools import library as lib_tools
@@ -55,26 +55,42 @@ def _root_uuid(proj_sch_path: Path) -> str:
     raise RuntimeError(f"root schematic {proj_sch_path} has no uuid")
 
 
+def _sheet_list() -> list[sheet_tree.SheetRef]:
+    proj = state.get_active()
+    return sheet_tree.walk(proj.path, proj.sch_path)
+
+
 def _instance_path() -> str:
     """Build the KiCAD instance path string for the currently active context.
 
-    - Root sheet:  `/{root_uuid}`
-    - Child sheet: `/{root_uuid}/{sheet_in_root_uuid}`
+    - Root sheet:   `/{root_uuid}`
+    - Sub-sheet:    `/{root_uuid}/{sheet uuid}`, one uuid per nesting level
     """
     proj = state.get_active()
     root_uuid = _root_uuid(proj.sch_path)
     active_filename = state.get_active_sheet_filename()
     if active_filename is None:
         return f"/{root_uuid}"
-
-    root_tree = sch_io.parse_file(proj.sch_path)
-    sheet_node = ed.find_sheet_by_filename(root_tree, active_filename)
-    if sheet_node is None:
+    try:
+        ref = sheet_tree.find(_sheet_list(), active_filename)
+    except KeyError as e:
         raise RuntimeError(
-            f"active sheet {active_filename!r} is not registered in the root "
-            f"schematic. Was it removed manually?"
-        )
-    return f"/{root_uuid}/{ed.get_sheet_uuid(sheet_node)}"
+            f"active sheet {active_filename!r} is not registered in the project. "
+            f"Was it removed manually?"
+        ) from e
+    return sheet_tree.instance_path(root_uuid, ref)
+
+
+def _sheet_block(key: str) -> tuple[sheet_tree.SheetRef, Path, list, list]:
+    """(ref, parent file, parent tree, the sheet block) for a sheet named by `key`."""
+    proj = state.get_active()
+    ref = sheet_tree.find(_sheet_list(), key)
+    parent_path = sheet_tree.parent_file(proj.path, proj.sch_path, ref)
+    parent_tree = sch_io.parse_file(parent_path)
+    node = ed.find_sheet_by_filename(parent_tree, ref.filename)
+    if node is None:
+        raise RuntimeError(f"sheet {ref.filename!r} vanished from {parent_path.name}")
+    return ref, parent_path, parent_tree, node
 
 
 def _resolve_lib_symbol(lib_id: str) -> tuple[Path, str, dict]:
@@ -97,13 +113,13 @@ def _resolve_lib_symbol(lib_id: str) -> tuple[Path, str, dict]:
 
 
 def project_sheet_paths() -> list[Path]:
-    """Root schematic plus every registered child sheet file that exists."""
+    """Root schematic plus every sheet file below it that exists, at any depth."""
     proj = state.get_active()
     paths = [proj.sch_path]
-    for node in sch_io.find_children(sch_io.parse_file(proj.sch_path), "sheet"):
-        name = ed.get_sheet_filename(node)
-        if name and (proj.path / name).is_file():
-            paths.append(proj.path / name)
+    for ref in _sheet_list():
+        path = proj.path / ref.filename
+        if path.is_file() and path not in paths:
+            paths.append(path)
     return paths
 
 
@@ -652,12 +668,17 @@ def register(mcp) -> None:
         paper: str = "A4",
         paper_width_mm: float | None = None,
         paper_height_mm: float | None = None,
+        parent: str = "",
     ) -> dict:
-        """Create a child sub-sheet on the ROOT schematic.
+        """Create a sub-sheet under the root, or under another sub-sheet.
 
-        Adds a `(sheet ...)` placeholder to the root and creates a fresh
-        blank child `.kicad_sch` file. The active context stays on root —
-        call `set_active_sheet` to switch into the new child.
+        Adds a `(sheet ...)` placeholder to the parent schematic and creates a
+        fresh blank child `.kicad_sch` file. The active sheet does not change;
+        call `set_active_sheet` to switch into the new one.
+
+        `parent` is the sheet that holds the block: its name, filename or
+        `a/b` path; empty means the root. A file can be used by one sheet only.
+        Coordinates are on the parent sheet's page.
 
         If `sheet_filename` is omitted, it defaults to a slugified
         `{sheet_name}.kicad_sch`. `paper` sets the child's paper size
@@ -670,28 +691,33 @@ def register(mcp) -> None:
         if not sheet_filename.endswith(".kicad_sch"):
             raise ValueError("sheet_filename must end with .kicad_sch")
 
-        # Always operate on root — sheets must live in the root.
-        previous_sheet = state.get_active_sheet_filename()
-        state.set_active_sheet(None)
-        try:
-            tree, root_path = _load_active_schematic()
-            ed.add_sheet_node(
-                tree,
-                sheet_name=sheet_name,
-                sheet_filename=sheet_filename,
-                x_mm=x_mm,
-                y_mm=y_mm,
-                width_mm=width_mm,
-                height_mm=height_mm,
-                project_name=proj.name,
-            )
-            # Child first: a failure here must not leave a dangling sheet in the root.
-            child_path = proj.path / sheet_filename
-            write_blank_schematic(child_path, paper, paper_width_mm, paper_height_mm)
-            backup = _save_with_backup(tree, root_path)
-        finally:
-            if previous_sheet is not None:
-                state.set_active_sheet(previous_sheet)
+        sheets = _sheet_list()
+        if any(sh.filename == sheet_filename for sh in sheets):
+            raise ValueError(f"sheet {sheet_filename!r} already registered")
+        root_uuid = _root_uuid(proj.sch_path)
+        if parent:
+            parent_ref = sheet_tree.find(sheets, parent)
+            parent_path = proj.path / parent_ref.filename
+            parent_inst = sheet_tree.instance_path(root_uuid, parent_ref)
+        else:
+            parent_path, parent_inst = proj.sch_path, None
+        tree = sch_io.parse_file(parent_path)
+        ed.add_sheet_node(
+            tree,
+            sheet_name=sheet_name,
+            sheet_filename=sheet_filename,
+            x_mm=x_mm,
+            y_mm=y_mm,
+            width_mm=width_mm,
+            height_mm=height_mm,
+            project_name=proj.name,
+            parent_instance_path=parent_inst,
+            page_no=len(sheets) + 2,
+        )
+        # Child first: a failure here must not leave a dangling sheet in the parent.
+        child_path = proj.path / sheet_filename
+        write_blank_schematic(child_path, paper, paper_width_mm, paper_height_mm)
+        backup = _save_with_backup(tree, parent_path)
         logger.info("added sheet %s -> %s", sheet_name, sheet_filename)
         return {
             "sheet_name": sheet_name,
@@ -714,15 +740,8 @@ def register(mcp) -> None:
             state.set_active_sheet(None)
             return {"active_sheet": "root", "path": str(proj.sch_path)}
 
-        # Accept either filename or sheet_name
-        if not sheet.endswith(".kicad_sch"):
-            root_tree = sch_io.parse_file(proj.sch_path)
-            node = ed.find_sheet_by_name(root_tree, sheet)
-            if node is None:
-                raise KeyError(f"no sheet named {sheet!r} in root")
-            sheet = ed.get_sheet_filename(node) or ""
-            if not sheet:
-                raise RuntimeError(f"sheet {sheet!r} has no Sheetfile")
+        # Accept a filename, a sheet name, or an `a/b` path for nested sheets.
+        sheet = sheet_tree.find(_sheet_list(), sheet).filename
 
         state.set_active_sheet(sheet)
         return {
@@ -741,14 +760,21 @@ def register(mcp) -> None:
 
     @mcp.tool()
     def list_sheets() -> dict:
-        """List the root schematic and every registered child sheet."""
+        """List the root and every sheet below it (`children` = root level, `all` = every depth)."""
         proj = state.get_active()
         root = sch_io.parse_file(proj.sch_path)
         children = ed.list_sheets(root)
+        everything = [
+            {"name": sh.name, "path": sh.path, "filename": sh.filename,
+             "parent": sh.parent or "root", "depth": len(sh.names)}
+            for sh in _sheet_list()
+        ]
         return {
             "root": {"name": "root", "path": str(proj.sch_path)},
             "children": children,
             "count": len(children),
+            "all": everything,
+            "total": len(everything),
         }
 
     @mcp.tool()
@@ -793,20 +819,17 @@ def register(mcp) -> None:
         """Create the sheet pins for a child sheet from its hierarchical labels.
 
         Reads the child's `hierarchical_label`s and adds a matching pin on the
-        sheet block in the ROOT for each one that has none (inputs, bidirectional
+        sheet block on its parent sheet for each one that has none (inputs, bidirectional
         and passive on the left edge, outputs on the right; the block grows to
         fit). Returns every pin with its MCP position so the root can be wired,
         and lists `stale` pins whose label no longer exists in the child.
         """
         proj = state.get_active()
-        root = sch_io.parse_file(proj.sch_path)
-        node = ed.find_sheet_by_name(root, sheet_name)
-        if node is None:
-            raise KeyError(f"no sheet named {sheet_name!r}")
-        child = sch_io.parse_file(proj.path / (ed.get_sheet_filename(node) or ""))
-        page_h = ed.page_height_mm(root)
+        ref, parent_path, parent_tree, node = _sheet_block(sheet_name)
+        child = sch_io.parse_file(proj.path / ref.filename)
+        page_h = ed.page_height_mm(parent_tree)
         report = sch_sheets.sync_sheet_pins(node, sch_sheets.child_interface(child), page_h)
-        backup = _save_with_backup(root, proj.sch_path)
+        backup = _save_with_backup(parent_tree, parent_path)
         return {
             "sheet": sheet_name,
             **report,
@@ -820,7 +843,7 @@ def register(mcp) -> None:
         scope: str = "global",
         stub_mm: float = 5.08,
     ) -> dict:
-        """Put a stub wire and a net label on every pin of a sheet block (ROOT).
+        """Put a stub wire and a net label on every pin of a sheet block (on its parent sheet).
 
         The label carries the pin's name. Use `scope="global"` (default) so the
         same name joins the nets of other sheets, or `local` to keep it on the
@@ -828,12 +851,8 @@ def register(mcp) -> None:
         """
         if scope not in ("local", "global"):
             raise ValueError("scope must be 'local' or 'global'")
-        proj = state.get_active()
-        root = sch_io.parse_file(proj.sch_path)
-        node = ed.find_sheet_by_name(root, sheet_name)
-        if node is None:
-            raise KeyError(f"no sheet named {sheet_name!r}")
-        pins = sch_sheets.sheet_pin_positions(node, ed.page_height_mm(root))
+        _ref, parent_path, parent_tree, node = _sheet_block(sheet_name)
+        pins = sch_sheets.sheet_pin_positions(node, ed.page_height_mm(parent_tree))
         if not pins:
             raise ValueError(f"sheet {sheet_name!r} has no pins; run sync_sheet_pins first")
         plan = [
@@ -843,8 +862,8 @@ def register(mcp) -> None:
             )
             for p in pins
         ]
-        counts = sch_connect.apply_plan(root, plan, stub_mm)
-        backup = _save_with_backup(root, proj.sch_path)
+        counts = sch_connect.apply_plan(parent_tree, plan, stub_mm)
+        backup = _save_with_backup(parent_tree, parent_path)
         return {"sheet": sheet_name, **counts, "backup": str(backup) if backup else None}
 
     @mcp.tool()
@@ -856,7 +875,7 @@ def register(mcp) -> None:
         y_mm: float,
         orientation: str = "right",
     ) -> dict:
-        """Add a sheet pin to a child sheet's placeholder on the ROOT.
+        """Add a sheet pin to a sub-sheet's block on its parent sheet.
 
         The pin must match a `hierarchical_label` of the same name inside
         the child sheet — that's how KiCAD bridges the nets.
@@ -864,27 +883,17 @@ def register(mcp) -> None:
         `pin_name` is the net name to expose (e.g., "+5V").
         `shape`: input | output | bidirectional | tri_state | passive
         """
-        proj = state.get_active()
-        previous = state.get_active_sheet_filename()
-        state.set_active_sheet(None)
-        try:
-            tree, root_path = _load_active_schematic()
-            sheet_node = ed.find_sheet_by_name(tree, sheet_name)
-            if sheet_node is None:
-                raise KeyError(f"no sheet named {sheet_name!r}")
-            ed.add_sheet_pin(
-                sheet_node,
-                pin_name=pin_name,
-                shape=shape,
-                x_mm=x_mm,
-                y_mm=y_mm,
-                page_h=ed.page_height_mm(tree),
-                orientation=orientation,
-            )
-            backup = _save_with_backup(tree, root_path)
-        finally:
-            if previous is not None:
-                state.set_active_sheet(previous)
+        _ref, parent_path, parent_tree, sheet_node = _sheet_block(sheet_name)
+        ed.add_sheet_pin(
+            sheet_node,
+            pin_name=pin_name,
+            shape=shape,
+            x_mm=x_mm,
+            y_mm=y_mm,
+            page_h=ed.page_height_mm(parent_tree),
+            orientation=orientation,
+        )
+        backup = _save_with_backup(parent_tree, parent_path)
         return {
             "sheet": sheet_name,
             "pin": pin_name,

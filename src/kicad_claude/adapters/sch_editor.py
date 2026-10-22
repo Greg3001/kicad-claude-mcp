@@ -680,8 +680,14 @@ def add_sheet_node(
     width_mm: float,
     height_mm: float,
     project_name: str,
+    parent_instance_path: str | None = None,
+    page_no: int | None = None,
 ) -> list:
-    """Append a `(sheet ...)` placeholder to the parent (root) schematic.
+    """Append a `(sheet ...)` placeholder to the parent schematic (root by default).
+
+    `parent_instance_path` is the parent sheet's own instance path
+    (`/<root>/<uuid>...`); omit it for the root. `page_no` numbers the new
+    page (default: after the sheets already in `parent_tree`).
 
     The placeholder references `sheet_filename` (relative path) and is sized
     `width_mm × height_mm`. Returns the new node.
@@ -700,7 +706,10 @@ def add_sheet_node(
     top_left_kicad = (bl_k[0], bl_k[1] - height_mm)
     root_uuid = _schematic_uuid(parent_tree)
     sheet_uuid = str(uuid.uuid4())
-    page_no = len(find_children(parent_tree, "sheet")) + 2  # the root is page 1
+    if page_no is None:
+        page_no = len(find_children(parent_tree, "sheet")) + 2  # the root is page 1
+    if parent_instance_path is None:
+        parent_instance_path = f"/{root_uuid}"
 
     def _prop(name: str, value: str, dy: float, hide: bool) -> list:
         node: list = [
@@ -731,7 +740,7 @@ def add_sheet_node(
             [
                 sym("project"),
                 project_name,
-                [sym("path"), f"/{root_uuid}", [sym("page"), str(page_no)]],
+                [sym("path"), parent_instance_path, [sym("page"), str(page_no)]],
             ],
         ],
     ]

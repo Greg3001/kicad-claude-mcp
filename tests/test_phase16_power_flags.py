@@ -23,13 +23,6 @@ def test_undriven_refs_reads_type_and_reference_not_the_words():
     assert power_flags.undriven_refs(data) == [("/", "#PWR0007"), ("/som/", "#PWR0002")]
 
 
-def test_sheet_path_to_name():
-    assert power_flags.sheet_name_of("/") is None
-    assert power_flags.sheet_name_of("/som/") == "som"
-    with pytest.raises(ValueError, match="nested"):
-        power_flags.sheet_name_of("/a/b/")
-
-
 def rail_between(mcp, ref="R1", x=101.6):
     """A resistor from +3V3 to GND, power symbols sitting on its pins."""
     call(mcp, "add_symbol", lib_id="MiniLib:Resistor", reference=ref, value="1k", x_mm=x, y_mm=101.6)

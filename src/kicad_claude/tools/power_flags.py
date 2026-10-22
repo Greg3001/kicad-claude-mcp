@@ -9,7 +9,7 @@ import json
 import logging
 
 from kicad_claude import state
-from kicad_claude.adapters import kicad_cli, power_flags
+from kicad_claude.adapters import kicad_cli, power_flags, sheet_tree
 from kicad_claude.adapters import sch_editor as ed
 from kicad_claude.adapters import sch_io
 from kicad_claude.tools import schematic as sch_tools
@@ -26,16 +26,11 @@ def _erc_raw(timeout: float) -> dict:
 def _locate(sheet_path: str, ref: str) -> tuple[str | None, str, tuple[float, float]]:
     """(sheet filename or None for root, net name, pin position) of a power symbol."""
     proj = state.get_active()
-    name = power_flags.sheet_name_of(sheet_path)
-    root = sch_io.parse_file(proj.sch_path)
-    filename = None
-    path = proj.sch_path
-    if name is not None:
-        node = ed.find_sheet_by_name(root, name)
-        if node is None:
-            raise KeyError(f"ERC names sheet {name!r}, which the root does not have")
-        filename = ed.get_sheet_filename(node)
-        path = proj.path / (filename or "")
+    path, filename = proj.sch_path, None
+    key = sheet_path.strip("/")
+    if key:  # ERC reports `/a/b/`: names from the top
+        filename = sheet_tree.find(sheet_tree.walk(proj.path, proj.sch_path), key).filename
+        path = proj.path / filename
     tree = sch_io.parse_file(path)
     symbol = ed.find_symbol_by_reference(tree, ref)
     if symbol is None:
