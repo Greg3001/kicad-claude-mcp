@@ -6,27 +6,24 @@ everywhere; the kicad-cli round trips are skipped when KiCad is absent.
 
 from __future__ import annotations
 
-import json
 import subprocess
-from collections import Counter
 from pathlib import Path
 
 import pytest
 
 from kicad_claude.adapters import sch_editor as ed
 from kicad_claude.adapters import sch_io, symbol_lib
-import shutil
 
-from mcp.server.fastmcp import FastMCP
+from .carrier_support import (
+    FIXTURES,
+    KICAD_CLI,
+    call,
+    erc_counts,
+    needs_kicad,
+    netlist_pins,
+    refs_on,
+)
 
-from kicad_claude import state
-from kicad_claude.indexer import kicad_libs
-from kicad_claude.tools import library as lib_tools
-from kicad_claude.tools import schematic as sch_tools
-from kicad_claude.templates.blank import write_blank_project
-from kicad_claude.utils.kicad_paths import find_kicad_cli
-
-FIXTURES = Path(__file__).parent / "fixtures"
 UNIT_LIB = FIXTURES / "UnitLib.kicad_sym"
 MINI_LIB = FIXTURES / "MiniLib.kicad_sym"
 
@@ -86,35 +83,6 @@ def test_pins_of_unit_adds_shared_pins_only_for_requested_unit():
     assert nums(2) == ["3", "4", "8"]
 
 
-# ===== helpers: real KiCad round trips ===================================== #
-
-KICAD_CLI = find_kicad_cli()
-needs_kicad = pytest.mark.skipif(KICAD_CLI is None, reason="kicad-cli not installed")
-
-
-@pytest.fixture
-def blank_project(tmp_path: Path):
-    state.clear_active()
-    files = write_blank_project(tmp_path / "demo", "demo")
-    state.set_active(tmp_path / "demo", "demo")
-    yield files
-    state.clear_active()
-
-
-def erc_counts(sch_path: Path) -> Counter:
-    """Run kicad-cli ERC and count violations by type across all sheets."""
-    out = sch_path.with_suffix(".erc.json")
-    subprocess.run(
-        [str(KICAD_CLI), "sch", "erc", "--format", "json", "--severity-all",
-         "-o", str(out), str(sch_path)],
-        capture_output=True, text=True, timeout=120, check=False,
-    )
-    report = json.loads(out.read_text())
-    return Counter(
-        v["type"] for sh in report.get("sheets", []) for v in sh.get("violations", [])
-    )
-
-
 def place(sch_path: Path, lib: Path, name: str, ref: str, x: float, y: float, **kw) -> list:
     tree = sch_io.parse_file(sch_path)
     node = ed.add_symbol(
@@ -135,31 +103,7 @@ def test_extends_symbol_has_pins_and_no_lib_mismatch_in_kicad(blank_project):
     assert counts["lib_symbol_mismatch"] == 0
 
 
-@pytest.fixture
-def mcp(blank_project, tmp_path, monkeypatch):
-    """FastMCP with schematic tools over a fixture index (MiniLib, UnitLib, power)."""
-    syms = tmp_path / "syms"
-    syms.mkdir()
-    for lib in FIXTURES.glob("*.kicad_sym"):
-        shutil.copy(lib, syms / lib.name)
-    idx = kicad_libs.build_index(symbol_dirs=[syms], footprint_dirs=[])
-    monkeypatch.setattr(lib_tools, "load_cache", lambda: idx)
-    monkeypatch.setattr(lib_tools, "_index", None)
-    server = FastMCP("test")
-    sch_tools.register(server)
-    lib_tools.register(server)
-    return server
-
-
-def call(server, name: str, **kwargs):
-    return server._tool_manager.get_tool(name).fn(**kwargs)
-
-
 # ===== project-wide power references ======================================= #
-
-
-def _refs_on(path: Path) -> list[str]:
-    return ed.all_references(sch_io.parse_file(path))
 
 
 def test_power_refs_unique_across_sheets(mcp, blank_project):
@@ -172,7 +116,7 @@ def test_power_refs_unique_across_sheets(mcp, blank_project):
         call(mcp, "add_power_symbol", net="GND", x_mm=50.8, y_mm=50.8)
     refs = []
     for f in ("demo.kicad_sch", "a.kicad_sch", "b.kicad_sch"):
-        refs += _refs_on(proj / f)
+        refs += refs_on(proj / f)
     assert sorted(refs) == ["#PWR0001", "#PWR0002", "#PWR0003"]
 
 
@@ -203,23 +147,6 @@ def test_multi_sheet_power_symbols_pass_annotation_in_kicad(mcp, blank_project):
 
 
 # ===== multi-unit symbols ================================================== #
-
-
-def netlist_pins(sch_path: Path) -> dict[str, set[tuple[str, str]]]:
-    """Export a kicadxml netlist and return {net name: {(ref, pin)}}."""
-    import re
-
-    out = sch_path.with_suffix(".xml")
-    subprocess.run(
-        [str(KICAD_CLI), "sch", "export", "netlist", "--format", "kicadxml",
-         "-o", str(out), str(sch_path)],
-        capture_output=True, text=True, timeout=120, check=False,
-    )
-    text = out.read_text()
-    nets = {}
-    for name, body in re.findall(r'<net code="\d+" name="([^"]+)"[^>]*>(.*?)</net>', text, re.S):
-        nets[name] = set(re.findall(r'<node ref="([^"]+)" pin="([^"]+)"', body))
-    return nets
 
 
 def place_quad(server, ref="U1", **kw):

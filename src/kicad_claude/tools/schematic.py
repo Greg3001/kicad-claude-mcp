@@ -84,6 +84,8 @@ def _resolve_lib_symbol(lib_id: str) -> tuple[Path, str, dict]:
         raise KeyError(
             f"unknown lib_id {lib_id!r} — did you call index_libraries first?"
         )
+    if meta.get("path") and Path(meta["path"]).is_file():  # project-local library
+        return Path(meta["path"]), meta["name"], meta
     for d in idx.get("symbol_dirs", []):
         path = Path(d) / f"{meta['lib']}.kicad_sym"
         if path.is_file():

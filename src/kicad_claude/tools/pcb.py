@@ -61,7 +61,9 @@ def _resolve_footprint(lib_id: str) -> Path:
         raise ValueError(f"lib_id must be 'Lib:Name' (got {lib_id!r})")
     lib_name, fp_name = lib_id.split(":", 1)
 
-    # Search project libs first, then official.
+    if fp_meta.get("path") and Path(fp_meta["path"]).is_file():  # project-local library
+        return Path(fp_meta["path"])
+    # Search the official libs.
     for d in idx.get("footprint_dirs", []):
         path = Path(d) / f"{lib_name}.pretty" / f"{fp_name}.kicad_mod"
         if path.is_file():

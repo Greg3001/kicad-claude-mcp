@@ -162,19 +162,21 @@ def _extract_pins(node: list) -> list[dict[str, Any]]:
 
 
 def get_symbol_pins(lib_path: Path, symbol_name: str) -> list[dict[str, Any]]:
-    """Open a `.kicad_sym` and return full pin metadata for one symbol."""
-    text = lib_path.read_text(encoding="utf-8", errors="replace")
+    """Open a `.kicad_sym` and return full pin metadata for one symbol.
+
+    `extends` stubs are resolved first, so derived symbols report the pins
+    they inherit.
+    """
+    from kicad_claude.adapters import symbol_lib  # local: adapters import this package
+
     try:
-        data = sexpdata.loads(text)
-    except Exception as e:  # noqa: BLE001
+        return _extract_pins(symbol_lib.load_symbol_def(lib_path, symbol_name))
+    except (OSError, KeyError, ValueError) as e:
+        logger.warning("failed to read pins of %s in %s: %s", symbol_name, lib_path, e)
+        return []
+    except Exception as e:  # noqa: BLE001 - sexpdata raises assorted parse errors
         logger.warning("failed to parse %s for pins: %s", lib_path, e)
         return []
-    if not _is_call(data, "kicad_symbol_lib"):
-        return []
-    for child in data[1:]:
-        if _is_call(child, "symbol") and len(child) >= 2 and child[1] == symbol_name:
-            return _extract_pins(child)
-    return []
 
 
 def parse_symbol_lib(path: Path) -> list[dict[str, Any]]:

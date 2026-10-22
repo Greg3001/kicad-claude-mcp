@@ -14,6 +14,8 @@ import logging
 from pathlib import Path
 from typing import Any
 
+from kicad_claude import state
+from kicad_claude.indexer import project_libs
 from kicad_claude.indexer.kicad_libs import (
     build_index,
     cache_path,
@@ -30,7 +32,7 @@ logger = logging.getLogger("kicad-claude.tools.library")
 _index: dict[str, Any] | None = None
 
 
-def _ensure_index() -> dict[str, Any]:
+def _load_base_index() -> dict[str, Any]:
     global _index
     if _index is None:
         _index = load_cache()
@@ -39,6 +41,32 @@ def _ensure_index() -> dict[str, Any]:
                 "Library index not built. Call `index_libraries` first."
             )
     return _index
+
+
+_merged: tuple[dict[str, Any], tuple, dict[str, Any]] | None = None
+
+
+def _ensure_index() -> dict[str, Any]:
+    """The global index plus the active project's own libraries.
+
+    Project entries win over a global entry with the same lib_id (KiCad's
+    project tables override too) and carry a `path` placement prefers.
+    """
+    global _merged
+    base = _load_base_index()
+    proj = state.get_active_or_none()
+    overlay = project_libs.overlay_for(proj.path) if proj else None
+    if overlay is None:
+        return base
+    if _merged is not None and _merged[0] is base and _merged[1] == overlay["key"]:
+        return _merged[2]
+    merged = {
+        **base,
+        "symbols": {**base["symbols"], **overlay["symbols"]},
+        "footprints": {**base["footprints"], **overlay["footprints"]},
+    }
+    _merged = (base, overlay["key"], merged)
+    return merged
 
 
 def _invalidate() -> None:
@@ -145,7 +173,9 @@ def register(mcp) -> None:
             raise KeyError(f"unknown symbol lib_id: {lib_id!r}")
 
         pins: list[dict] = []
-        for d_str in idx.get("symbol_dirs", []):
+        if meta.get("path"):
+            pins = get_symbol_pins(Path(meta["path"]), meta["name"])
+        for d_str in idx.get("symbol_dirs", []) if not pins else []:
             lib_path = Path(d_str) / f"{meta['lib']}.kicad_sym"
             if lib_path.is_file():
                 pins = get_symbol_pins(lib_path, meta["name"])
