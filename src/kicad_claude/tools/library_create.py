@@ -14,6 +14,7 @@ from __future__ import annotations
 import logging
 
 from kicad_claude import state
+from kicad_claude.adapters import footprint_pads
 from kicad_claude.adapters import library_create as lc
 
 logger = logging.getLogger("kicad-claude.tools.library_create")
@@ -84,6 +85,7 @@ def register(mcp) -> None:
         tags: str = "",
         add_courtyard: bool = True,
         add_silk_outline: bool = True,
+        validate: bool = True,
     ) -> dict:
         """Create a new PCB footprint in `<project>/lib/<lib_name>.pretty/`.
 
@@ -97,8 +99,10 @@ def register(mcp) -> None:
           - `layers` (optional override; sensible defaults for SMD vs THT)
 
         Auto-generates F.CrtYd courtyard + F.SilkS outline by default
-        (toggle via flags). After running, call `index_libraries(force=True)`
-        to make this footprint searchable via `search_footprint`.
+        (toggle via flags). The file is checked with `kicad-cli fp upgrade` and
+        removed if KiCad rejects it. It is usable at once (project libraries
+        are picked up automatically). For dual-row and QFN packages use
+        `create_footprint_dual` / `create_footprint_qfn`.
         """
         proj = state.get_active()
         if not pads:
@@ -110,4 +114,76 @@ def register(mcp) -> None:
             description=description, tags=tags,
             add_courtyard=add_courtyard,
             add_silk_outline=add_silk_outline,
+            validate=validate,
         )
+
+    @mcp.tool()
+    def create_footprint_dual(
+        lib_name: str,
+        footprint_name: str,
+        pin_count: int,
+        pitch_mm: float,
+        row_span_mm: float,
+        pad_length_mm: float,
+        pad_width_mm: float,
+        ep_width_mm: float | None = None,
+        ep_height_mm: float | None = None,
+        ep_number: str | None = None,
+        description: str = "",
+        tags: str = "",
+    ) -> dict:
+        """Create a dual-row SMD footprint (SOIC, TSSOP, HTSSOP, PowerPAD...).
+
+        Pin 1 is top-left, numbering counter-clockwise: the left column runs
+        top to bottom, the right column bottom to top. `row_span_mm` is the
+        pad-centre to pad-centre distance between the rows; `pad_length_mm`
+        runs across the rows, `pad_width_mm` along them. Give `ep_width_mm` and
+        `ep_height_mm` for a centred exposed (thermal) pad, numbered
+        `ep_number` (default: the next number after the last pin) - make the
+        symbol's pin number agree.
+        """
+        pads = footprint_pads.dual_row_pads(
+            pin_count, pitch_mm, row_span_mm, pad_length_mm, pad_width_mm,
+            ep_width_mm, ep_height_mm, ep_number)
+        return lc.create_footprint(
+            state.get_active().path, lib_name=lib_name, footprint_name=footprint_name,
+            pads=pads, description=description, tags=tags)
+
+    @mcp.tool()
+    def create_footprint_qfn(
+        lib_name: str,
+        footprint_name: str,
+        pins_per_side: int,
+        pitch_mm: float,
+        span_mm: float,
+        pad_length_mm: float,
+        pad_width_mm: float,
+        ep_width_mm: float | None = None,
+        ep_height_mm: float | None = None,
+        ep_number: str | None = None,
+        pins_top_bottom: int | None = None,
+        span_y_mm: float | None = None,
+        end_pad_length_mm: float | None = None,
+        description: str = "",
+        tags: str = "",
+    ) -> dict:
+        """Create a four-sided SMD footprint (QFN, VQFN, WQFN, LGA), square or rectangular.
+
+        Pin 1 is top-left on the left side; numbering is counter-clockwise:
+        left side top to bottom, bottom left to right, right bottom to top,
+        top right to left. `pins_per_side` is the pad count of the left and
+        right sides; `pins_top_bottom` that of the top and bottom ends (default
+        the same: a square part). `span_mm` is the pad-centre distance between
+        the left and right columns, `span_y_mm` between the top and bottom rows
+        (default `span_mm`). `pad_length_mm` runs away from the body;
+        `end_pad_length_mm` overrides it on the ends. Give the exposed-pad size
+        for a centred thermal pad, numbered `ep_number` (default: the next
+        number after the last pin - make the symbol agree).
+        """
+        pads = footprint_pads.qfn_pads(
+            pins_per_side, pitch_mm, span_mm, pad_length_mm, pad_width_mm,
+            ep_width_mm, ep_height_mm, ep_number,
+            pins_top_bottom, span_y_mm, end_pad_length_mm)
+        return lc.create_footprint(
+            state.get_active().path, lib_name=lib_name, footprint_name=footprint_name,
+            pads=pads, description=description, tags=tags)

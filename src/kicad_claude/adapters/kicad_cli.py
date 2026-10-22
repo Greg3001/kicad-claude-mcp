@@ -58,6 +58,29 @@ def _run(args: list[str], *, timeout: float = 120.0, cwd: Path | None = None) ->
     return r.stdout, r.stderr
 
 
+def validate_footprint(mod_path: Path, timeout: float = 60.0) -> bool:
+    """True if kicad-cli loads the `.kicad_mod` (via `fp upgrade`), False if it rejects it.
+
+    Works on a scratch copy; the file itself is untouched. Returns True without
+    checking when kicad-cli is not installed, so callers need no special case.
+    """
+    import shutil
+    import tempfile
+
+    if find_kicad_cli() is None:
+        return True
+    mod_path = Path(mod_path)
+    with tempfile.TemporaryDirectory(prefix="kicad-claude-fp-") as tmp:
+        pretty = Path(tmp) / "check.pretty"
+        pretty.mkdir()
+        shutil.copy2(mod_path, pretty / mod_path.name)
+        try:
+            _run(["fp", "upgrade", "--force", str(pretty)], timeout=timeout)
+        except KicadCliError:
+            return False
+        return (pretty / mod_path.name).stat().st_size > 0
+
+
 def _list_files(p: Path) -> list[str]:
     """Names of regular files directly inside `p`. Returns [] if p doesn't exist."""
     if not p.is_dir():

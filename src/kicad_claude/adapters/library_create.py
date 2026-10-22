@@ -20,7 +20,7 @@ import uuid as _uuid
 from pathlib import Path
 from typing import Any
 
-from kicad_claude.adapters import sch_io, symbol_layout, vendor_import
+from kicad_claude.adapters import kicad_cli, sch_io, symbol_layout, vendor_import
 from kicad_claude.adapters.sch_io import is_call, sym
 
 logger = logging.getLogger("kicad-claude.adapters.library_create")
@@ -488,12 +488,14 @@ def create_footprint(
     tags: str = "",
     add_courtyard: bool = True,
     add_silk_outline: bool = True,
+    validate: bool = True,
 ) -> dict:
     """Top-level: write a footprint to <project>/lib/<lib_name>.pretty/<footprint_name>.kicad_mod.
 
     Auto-courtyard (F.CrtYd) and auto-silk outline (F.SilkS) are inflated
     around the pad bounding box. Disable with add_courtyard=False or
-    add_silk_outline=False.
+    add_silk_outline=False. The file is checked with `kicad-cli fp upgrade`
+    and removed if KiCad rejects it (`validate=False` skips that).
     """
     project_dir = Path(project_dir)
     pretty_dir = project_dir / "lib" / f"{lib_name}.pretty"
@@ -510,6 +512,9 @@ def create_footprint(
         add_silk_outline=add_silk_outline,
     )
     sch_io.write_file(target, node)
+    if validate and not kicad_cli.validate_footprint(target):
+        target.unlink()
+        raise ValueError(f"kicad-cli rejected the generated footprint {qualified!r}; nothing was written")
     table_path = vendor_import.update_fp_lib_table(project_dir, lib_name)
     return {
         "lib_id": qualified,

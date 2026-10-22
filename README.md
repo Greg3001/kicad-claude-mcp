@@ -1,11 +1,11 @@
 # kicad-claude-mcp
 
 > Design KiCAD PCBs from natural language. An MCP server that gives Claude
-> Code (or any MCP client) **117 tools** to drive a complete PCB workflow —
+> Code (or any MCP client) **119 tools** to drive a complete PCB workflow —
 > schematic capture, library management, PCB layout, autorouting, manufacturing
 > outputs, signal-integrity calculations, RF design, and more.
 
-**117 MCP tools · 408 tests passing · 16 phases · headless from idea to gerbers**
+**119 MCP tools · 432 tests passing · 16 phases · headless from idea to gerbers**
 
 The server edits `.kicad_sch` / `.kicad_pcb` / `.kicad_pro` files directly.
 You drive it via Claude Code; you open KiCAD only to review the result.
@@ -104,7 +104,7 @@ Add to `~/.claude/settings.json`:
 
 - **22,000+ KiCAD official symbols indexed** — `index_libraries`, `search_symbol`, `search_footprint`, `get_symbol_details`
 - **External sourcing**: `find_or_fetch_symbol`, `import_vendor_zip` (SnapEDA / Ultra Librarian), `check_availability` (DigiKey + Mouser)
-- **Custom footprints**: `create_footprint` with auto-courtyard and silk outline
+- **Custom footprints**: `create_footprint` with auto-courtyard and silk outline (checked with `kicad-cli fp upgrade`); `create_footprint_dual` (SOIC / TSSOP / HTSSOP with exposed pad) and `create_footprint_qfn` (square or rectangular QFN / WQFN with exposed pad) generate the pads from datasheet dimensions, pin 1 top-left, counter-clockwise
 
 ### PCB layout
 
@@ -198,7 +198,7 @@ enrich_bom_with_sourcing  sources="digikey,mouser"
 ```
 kicad-claude-mcp/
 ├── server.py                          # FastMCP entry point — registers all tools
-├── pyproject.toml                     # uv project + 117 tool surface
+├── pyproject.toml                     # uv project + 119 tool surface
 ├── .env.example                       # API keys + path overrides
 ├── src/kicad_claude/
 │   ├── tools/                         # MCP tools (one file per phase)
