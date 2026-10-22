@@ -150,3 +150,34 @@ def test_add_items_is_atomic(mcp, blank_project):
 def test_add_items_rejects_oversized_batch(mcp):
     with pytest.raises(ValueError, match="at most"):
         call(mcp, "add_items", items=[{"op": "junction", "x": 0, "y": 0}] * 5001)
+
+
+# ===== custom power rails ==================================================== #
+
+
+def test_custom_rail_borrows_stock_graphics(mcp, blank_project):
+    res = call(mcp, "add_power_symbol", net="VCC_1V8_PL", x_mm=101.6, y_mm=101.6)
+    assert res["lib_id"] == "power:+3V3" and res["reference"] == "#PWR0001"
+    node = ed.find_symbol_by_reference(sch_io.parse_file(blank_project["sch"]), "#PWR0001")
+    assert ed.get_symbol_property(node, "Value") == "VCC_1V8_PL"
+
+
+def test_custom_ground_style_and_stock_net_unchanged(mcp):
+    assert call(mcp, "add_power_symbol", net="AGND_ADC", style="GND",
+                x_mm=101.6, y_mm=101.6)["lib_id"] == "power:GND"
+    assert call(mcp, "add_power_symbol", net="GND", x_mm=127, y_mm=101.6)["lib_id"] == "power:GND"
+
+
+def test_unknown_style_lists_available(mcp):
+    with pytest.raises(KeyError, match="available styles"):
+        call(mcp, "add_power_symbol", net="X", style="NOPE", x_mm=101.6, y_mm=101.6)
+
+
+@needs_kicad
+def test_custom_rail_names_the_net_in_kicad(mcp, blank_project):
+    call(mcp, "add_symbol", lib_id="MiniLib:Resistor", reference="R1", value="1k",
+         x_mm=101.6, y_mm=101.6)
+    top = [p for p in call(mcp, "list_pins", reference="R1") if p["number"] == "1"][0]
+    call(mcp, "add_power_symbol", net="VCC_1V8_PL", x_mm=top["position_mm"][0],
+         y_mm=top["position_mm"][1])
+    assert netlist_pins(blank_project["sch"])["VCC_1V8_PL"] == {("R1", "1")}

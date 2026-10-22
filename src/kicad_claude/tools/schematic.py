@@ -358,24 +358,39 @@ def register(mcp) -> None:
         }
 
     @mcp.tool()
-    def add_power_symbol(net: str, x_mm: float, y_mm: float) -> dict:
-        """Place a power symbol (e.g. +5V, +3V3, GND) from the `power` library.
+    def add_power_symbol(
+        net: str,
+        x_mm: float,
+        y_mm: float,
+        rotation: float = 0,
+        style: str | None = None,
+    ) -> dict:
+        """Place a power symbol (e.g. +5V, +3V3, GND, PWR_FLAG) on the active sheet.
 
-        Auto-assigns a hidden `#PWR####` reference. The library symbol id is
-        `power:{net}`; if that doesn't exist in the index, the call fails with
-        a hint listing valid power nets.
+        Auto-assigns a hidden `#PWR####` (or `#FLG####`) reference, unique
+        across all sheets. A power symbol's NET NAME is its Value text, so a
+        rail the `power` library has no symbol for (VCC_1V8_PL, +0V85, ...) is
+        drawn with a stock symbol's graphics (`style`) and the custom value.
+
+        Args:
+            net: net name, e.g. "GND", "+3V3", "VCC_PSINT_FP".
+            rotation: 0/90/180/270 (a supply arrow points up at 0, GND down).
+            style: library symbol to borrow the drawing from when `power:{net}`
+                does not exist. Default `+3V3` (arrow up); use `GND` for a
+                ground-type rail.
         """
-        candidate = f"power:{net}"
         idx = lib_tools._ensure_index()
+        candidate = f"power:{net}"
         if candidate not in idx["symbols"]:
-            available = sorted(
-                k.split(":", 1)[1] for k in idx["symbols"] if k.startswith("power:")
-            )
-            raise KeyError(
-                f"unknown power net {net!r} (looked up {candidate!r}); "
-                f"available: {available[:20]}{'...' if len(available) > 20 else ''}"
-            )
-
+            candidate = f"power:{style or '+3V3'}"
+            if candidate not in idx["symbols"]:
+                available = sorted(
+                    k.split(":", 1)[1] for k in idx["symbols"] if k.startswith("power:")
+                )
+                raise KeyError(
+                    f"no power symbol {candidate!r} to draw {net!r} with; "
+                    f"available styles: {available[:20]}{'...' if len(available) > 20 else ''}"
+                )
         tree, path = _load_active_schematic()
         ref = _next_power_reference(
             _project_references(), "#FLG" if net == "PWR_FLAG" else "#PWR"
@@ -390,7 +405,7 @@ def register(mcp) -> None:
             value=net,
             x_mm=x_mm,
             y_mm=y_mm,
-            rotation=0,
+            rotation=rotation,
             sym_def_node=sym_def,
             project_name=proj.name,
             instance_path=_instance_path(),
@@ -402,7 +417,9 @@ def register(mcp) -> None:
         return {
             "net": net,
             "reference": ref,
+            "lib_id": candidate,
             "position_mm": [x_mm, y_mm],
+            "warnings": geometry.grid_warning([(x_mm, y_mm)], "power symbol origins"),
             "backup": str(backup) if backup else None,
         }
 
