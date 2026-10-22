@@ -321,7 +321,10 @@ def test_reference_without_trailing_number_is_refused(mcp, ref):
              x_mm=101.6, y_mm=101.6)
 
 
-@pytest.mark.parametrize("ref", ["R1", "U_LATCH1", "TP_VCC2", "#PWR0001", "R?"])
+@pytest.mark.parametrize("ref", [
+    "R1", "U_LATCH1", "TP_VCC2", "#PWR0001", "R?",
+    "U_BUCK5V1", "U_BUCK1V81", "Q_OD_MODE21",  # digits inside the prefix are fine
+])
 def test_annotatable_references_are_accepted(mcp, ref):
     call(mcp, "add_symbol", lib_id="MiniLib:Resistor", reference=ref, value="1k",
          x_mm=101.6, y_mm=101.6)

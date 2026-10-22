@@ -320,11 +320,11 @@ def build_symbol_instance(
 # --------------------------------------------------------------------------- #
 
 
-_REFERENCE_RE = re.compile(r"^[A-Za-z_#]+[0-9]+$")
+_REFERENCE_RE = re.compile(r"^[A-Za-z_#].*[0-9]$")  # KiCad only needs a trailing number
 
 
 def _check_reference_format(reference: str) -> None:
-    """Reject references KiCad cannot annotate: letters then digits, or `?`-suffixed.
+    """Reject references KiCad cannot annotate: no trailing number (or a `?` suffix to annotate later).
 
     `U_LATCH` loads and passes ERC, but `kicad-cli sch export netlist` then
     reports annotation errors for the part; `U_LATCH1` is fine.
