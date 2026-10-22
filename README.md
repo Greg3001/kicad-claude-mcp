@@ -1,11 +1,11 @@
 # kicad-claude-mcp
 
 > Design KiCAD PCBs from natural language. An MCP server that gives Claude
-> Code (or any MCP client) **115 tools** to drive a complete PCB workflow —
+> Code (or any MCP client) **117 tools** to drive a complete PCB workflow —
 > schematic capture, library management, PCB layout, autorouting, manufacturing
 > outputs, signal-integrity calculations, RF design, and more.
 
-**115 MCP tools · 361 tests passing · 16 phases · headless from idea to gerbers**
+**117 MCP tools · 408 tests passing · 16 phases · headless from idea to gerbers**
 
 The server edits `.kicad_sch` / `.kicad_pcb` / `.kicad_pro` files directly.
 You drive it via Claude Code; you open KiCAD only to review the result.
@@ -93,9 +93,9 @@ Add to `~/.claude/settings.json`:
 
 ### Schematic capture
 
-- **Symbol placement & connections**: `add_symbol` (multi-unit parts: one call per `unit`; `fields=` for MPN / Manufacturer / Rad Grade at place time), `add_wire`, `add_junction`, `add_label`, `add_global_label`, `add_power_symbol` (any rail name), `add_no_connect`, `move_symbol`, `remove_symbol`, `set_symbol_field`, `set_dnp`, `add_text_note`, `get_pin_position`, `list_pins`
-- **Bulk capture**: `connect_pins` wires a whole connector (`{pin, net | nc}` list, local / global / hierarchical labels) in one call; `add_items` draws wires, labels and notes in one write; `set_sheet_paper` sets A5..A0 / User paper before drawing
-- **Hierarchical sheets**: `add_sheet`, `set_active_sheet`, `add_hierarchical_label`, `add_sheet_pin`, `sync_sheet_pins` (pins from the child's labels), `label_sheet_pins`, `list_sheets` — one level of sub-sheets under the root
+- **Symbol placement & connections**: `add_symbol` (multi-unit parts: one call per `unit`; `fields=` for MPN / Manufacturer / Rad Grade at place time), `add_wire`, `add_junction`, `add_label`, `add_global_label`, `add_power_symbol` (any rail name), `add_no_connect`, `move_symbol`, `remove_symbol`, `set_symbol_field`, `set_dnp`, `add_text_note`, `add_power_flags` (one PWR_FLAG per net ERC calls undriven), `get_pin_position`, `list_pins`
+- **Bulk capture**: `connect_pins` wires a whole connector (`{pin, net | nc}` list, local / global / hierarchical labels) in one call; `add_items` draws wires, labels and notes in one write; `set_sheet_paper` sets A5..A0 / User paper before drawing. New sheets use KiCad 10's file format version, so KiCad 9 cannot open them
+- **Hierarchical sheets**: `add_sheet`, `set_active_sheet`, `add_hierarchical_label`, `add_sheet_pin`, `sync_sheet_pins` (pins from the child's labels), `label_sheet_pins`, `list_sheets` — sub-sheets nest to any depth (`add_sheet(parent=)`, addressed by name, filename or `a/b` path)
 - **Buses**: `add_bus`, `add_bus_entry`, `add_bus_alias` — visual grouping of address/data lines
 - **Annotation**: `annotate_schematic` — auto-numbers `R?` → `R1, R2, ...` across all sheets
 - **Custom symbols**: `create_symbol` with per-pin `unit` / `side`; pins without coordinates are laid out automatically, so a 480-pin, 4-unit connector is one call. Project libraries (`<project>/lib`, `sym-lib-table`) are placeable and searchable immediately
@@ -109,7 +109,7 @@ Add to `~/.claude/settings.json`:
 ### PCB layout
 
 - **2 to 32 copper layers** with auto-generated stackup (`set_layer_count`)
-- **Footprint placement**: `add_footprint`, `move_footprint`, `place_footprints_grid`
+- **Footprint placement**: `add_footprint`, `move_footprint`, `place_footprints_grid`, `place_footprints_from_schematic` (every schematic part with a Footprint field, missing from the board, onto a staging grid in one call; then `update_pcb_from_schematic` assigns the nets)
 - **Routing**: `add_track`, `add_via`, `add_via_array`, `add_meander` (length tuning)
 - **Copper pours**: `add_zone`, `add_ground_plane` (auto-extracts board outline)
 - **Mechanical**: `add_mounting_hole` (M2/M2.5/M3/M4/M5), `add_fiducial`, `add_silk_text`
@@ -198,7 +198,7 @@ enrich_bom_with_sourcing  sources="digikey,mouser"
 ```
 kicad-claude-mcp/
 ├── server.py                          # FastMCP entry point — registers all tools
-├── pyproject.toml                     # uv project + 115 tool surface
+├── pyproject.toml                     # uv project + 117 tool surface
 ├── .env.example                       # API keys + path overrides
 ├── src/kicad_claude/
 │   ├── tools/                         # MCP tools (one file per phase)
