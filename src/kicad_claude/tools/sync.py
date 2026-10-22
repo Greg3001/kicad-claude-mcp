@@ -14,26 +14,9 @@ from pathlib import Path
 
 from kicad_claude import state
 from kicad_claude.adapters import annotation, kicad_cli, kicad_python
-from kicad_claude.adapters import sch_io
+from kicad_claude.tools.schematic import project_sheet_paths
 
 logger = logging.getLogger("kicad-claude.tools.sync")
-
-
-def _all_schematic_paths() -> list[Path]:
-    """Return root + every registered child .kicad_sch in the active project."""
-    proj = state.get_active()
-    paths = [proj.sch_path]
-    root = sch_io.parse_file(proj.sch_path)
-    for entry in root[1:]:
-        if not sch_io.is_call(entry, "sheet"):
-            continue
-        for prop in sch_io.find_children(entry, "property"):
-            if len(prop) >= 3 and prop[1] == "Sheetfile" and isinstance(prop[2], str):
-                child = proj.path / prop[2]
-                if child.is_file():
-                    paths.append(child)
-                break
-    return paths
 
 
 def register(mcp) -> None:
@@ -49,7 +32,7 @@ def register(mcp) -> None:
 
         Returns per-sheet stats and the total assignments made.
         """
-        paths = _all_schematic_paths()
+        paths = project_sheet_paths()
         result = annotation.annotate_sheets(paths, sort_by_position=sort_by_position)
         return result
 

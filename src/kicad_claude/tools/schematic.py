@@ -93,19 +93,41 @@ def _resolve_lib_symbol(lib_id: str) -> tuple[Path, str, dict]:
     )
 
 
-def _next_power_reference(tree: list) -> str:
-    """Auto-increment a `#PWR####` reference, picking the smallest unused number."""
+def project_sheet_paths() -> list[Path]:
+    """Root schematic plus every registered child sheet file that exists."""
+    proj = state.get_active()
+    paths = [proj.sch_path]
+    for node in sch_io.find_children(sch_io.parse_file(proj.sch_path), "sheet"):
+        name = ed.get_sheet_filename(node)
+        if name and (proj.path / name).is_file():
+            paths.append(proj.path / name)
+    return paths
+
+
+def _project_references() -> list[str]:
+    """Every reference designator used on any sheet of the active project."""
+    refs: list[str] = []
+    for path in project_sheet_paths():
+        refs += ed.all_references(sch_io.parse_file(path))
+    return refs
+
+
+def _next_power_reference(refs: list[str], prefix: str = "#PWR") -> str:
+    """Smallest unused `#PWR####` / `#FLG####` across the WHOLE project.
+
+    KiCad treats a repeated virtual reference on two sheets as an annotation
+    error, which makes `kicad-cli sch export netlist` print a warning and the
+    PCB update unreliable, so uniqueness has to be project-wide.
+    """
     used = set()
-    for ref in ed.all_references(tree):
-        if not ref:
-            continue
-        m = re.fullmatch(r"#PWR0*(\d+)", ref)
+    for ref in refs:
+        m = re.fullmatch(re.escape(prefix) + r"0*(\d+)", ref or "")
         if m:
             used.add(int(m.group(1)))
     n = 1
     while n in used:
         n += 1
-    return f"#PWR{n:04d}"
+    return f"{prefix}{n:04d}"
 
 
 # --------------------------------------------------------------------------- #
@@ -296,7 +318,9 @@ def register(mcp) -> None:
             )
 
         tree, path = _load_active_schematic()
-        ref = _next_power_reference(tree)
+        ref = _next_power_reference(
+            _project_references(), "#FLG" if net == "PWR_FLAG" else "#PWR"
+        )
         lib_path, sym_name, meta = _resolve_lib_symbol(candidate)
         sym_def = ed.fetch_symbol_def(lib_path, sym_name)
         proj = state.get_active()

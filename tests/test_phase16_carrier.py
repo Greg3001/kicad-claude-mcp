@@ -15,7 +15,14 @@ import pytest
 
 from kicad_claude.adapters import sch_editor as ed
 from kicad_claude.adapters import sch_io, symbol_lib
+import shutil
+
+from mcp.server.fastmcp import FastMCP
+
 from kicad_claude import state
+from kicad_claude.indexer import kicad_libs
+from kicad_claude.tools import library as lib_tools
+from kicad_claude.tools import schematic as sch_tools
 from kicad_claude.templates.blank import write_blank_project
 from kicad_claude.utils.kicad_paths import find_kicad_cli
 
@@ -126,3 +133,70 @@ def test_extends_symbol_has_pins_and_no_lib_mismatch_in_kicad(blank_project):
     counts = erc_counts(sch)
     assert counts["pin_not_connected"] == 2  # both pins exist
     assert counts["lib_symbol_mismatch"] == 0
+
+
+@pytest.fixture
+def mcp(blank_project, tmp_path, monkeypatch):
+    """FastMCP with schematic tools over a fixture index (MiniLib, UnitLib, power)."""
+    syms = tmp_path / "syms"
+    syms.mkdir()
+    for lib in FIXTURES.glob("*.kicad_sym"):
+        shutil.copy(lib, syms / lib.name)
+    idx = kicad_libs.build_index(symbol_dirs=[syms], footprint_dirs=[])
+    monkeypatch.setattr(lib_tools, "load_cache", lambda: idx)
+    monkeypatch.setattr(lib_tools, "_index", None)
+    server = FastMCP("test")
+    sch_tools.register(server)
+    lib_tools.register(server)
+    return server
+
+
+def call(server, name: str, **kwargs):
+    return server._tool_manager.get_tool(name).fn(**kwargs)
+
+
+# ===== project-wide power references ======================================= #
+
+
+def _refs_on(path: Path) -> list[str]:
+    return ed.all_references(sch_io.parse_file(path))
+
+
+def test_power_refs_unique_across_sheets(mcp, blank_project):
+    call(mcp, "add_sheet", sheet_name="a", sheet_filename="a.kicad_sch")
+    call(mcp, "add_sheet", sheet_name="b", sheet_filename="b.kicad_sch")
+    proj = blank_project["sch"].parent
+    call(mcp, "add_power_symbol", net="GND", x_mm=50.8, y_mm=50.8)
+    for sheet in ("a", "b"):
+        call(mcp, "set_active_sheet", sheet=sheet)
+        call(mcp, "add_power_symbol", net="GND", x_mm=50.8, y_mm=50.8)
+    refs = []
+    for f in ("demo.kicad_sch", "a.kicad_sch", "b.kicad_sch"):
+        refs += _refs_on(proj / f)
+    assert sorted(refs) == ["#PWR0001", "#PWR0002", "#PWR0003"]
+
+
+def test_power_flag_gets_flg_reference(mcp):
+    call(mcp, "add_power_symbol", net="GND", x_mm=50.8, y_mm=50.8)
+    res = call(mcp, "add_power_symbol", net="PWR_FLAG", x_mm=50.8, y_mm=50.8)
+    assert res["reference"] == "#FLG0001"
+
+
+@needs_kicad
+def test_multi_sheet_power_symbols_pass_annotation_in_kicad(mcp, blank_project):
+    call(mcp, "add_sheet", sheet_name="a", sheet_filename="a.kicad_sch")
+    call(mcp, "add_power_symbol", net="GND", x_mm=50.8, y_mm=50.8)
+    call(mcp, "set_active_sheet", sheet="a")
+    call(mcp, "add_power_symbol", net="GND", x_mm=50.8, y_mm=50.8)
+    out = blank_project["sch"].with_suffix(".net")
+    run = subprocess.run(
+        [str(KICAD_CLI), "sch", "export", "netlist", "-o", str(out),
+         str(blank_project["sch"])],
+        capture_output=True, text=True, timeout=120, check=False,
+    )
+    noise = [
+        ln for ln in (run.stdout + run.stderr).splitlines()
+        if ln.strip() and "Fontconfig" not in ln
+    ]
+    assert run.returncode == 0
+    assert noise == []  # any annotation warning would be printed here
