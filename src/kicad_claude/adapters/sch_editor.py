@@ -18,9 +18,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any
 
-import sexpdata
-
-from kicad_claude.adapters import sch_io
+from kicad_claude.adapters import sch_io, symbol_lib
 from kicad_claude.adapters.sch_io import (
     find_child,
     find_children,
@@ -202,21 +200,12 @@ def inject_lib_symbol(tree: list, symbol_def_node: list) -> None:
 
 
 def fetch_symbol_def(lib_path: Path, symbol_name: str) -> list:
-    """Open a `.kicad_sym`, return a deep copy of the named (symbol ...) node.
+    """Open a `.kicad_sym`, return a flat deep copy of the named (symbol ...) node.
 
-    The returned node is renamed-ready for lib_symbols: the caller should
-    set its name to "LibName:SymbolName" before injecting.
+    `extends` chains are resolved (see `symbol_lib`). The caller should set
+    the node's name to "LibName:SymbolName" before injecting.
     """
-    import copy
-
-    text = Path(lib_path).read_text(encoding="utf-8", errors="replace")
-    data = sexpdata.loads(text)
-    if not is_call(data, "kicad_symbol_lib"):
-        raise ValueError(f"not a kicad_symbol_lib: {lib_path}")
-    for child in data[1:]:
-        if is_call(child, "symbol") and len(child) >= 2 and child[1] == symbol_name:
-            return copy.deepcopy(child)
-    raise KeyError(f"symbol {symbol_name!r} not found in {lib_path}")
+    return symbol_lib.load_symbol_def(lib_path, symbol_name)
 
 
 def make_lib_symbol_entry(symbol_def_node: list, qualified_lib_id: str) -> list:
