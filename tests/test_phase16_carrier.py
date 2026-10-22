@@ -264,3 +264,17 @@ def test_both_units_placed_leaves_no_missing_unit_warning(mcp, blank_project):
     assert erc_counts(blank_project["sch"])["missing_unit"] == 1
     place_quad(mcp, x_mm=152.4, y_mm=101.6, unit=2)
     assert erc_counts(blank_project["sch"])["missing_unit"] == 0
+
+
+# ===== strings with line breaks ============================================ #
+
+
+def test_newline_is_escaped_not_written_raw():
+    out = sch_io.dumps([sch_io.sym("text"), "a\nb\r\nc"])
+    assert "\n" not in out
+    assert out == '(text "a\\nb\\r\\nc")'
+
+
+def test_multiline_string_round_trips():
+    node = [sch_io.sym("text"), 'line1\nline2 "q" \\ end']
+    assert sch_io.parse_file_text(sch_io.dumps(node)) == node

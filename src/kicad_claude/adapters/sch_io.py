@@ -101,8 +101,19 @@ def _atom(x: Any) -> str:
 
 
 def _escape(s: str) -> str:
-    """Backslash-escape `\\` and `"` for KiCAD string literals."""
-    return s.replace("\\", "\\\\").replace('"', '\\"')
+    """Escape a KiCAD string literal: `\\`, `"`, and line breaks.
+
+    A raw newline inside a quoted string makes kicad-cli refuse the whole file
+    ("Error loading schematic") without naming the node, so notes and
+    multi-line descriptions must be written as `\\n`. sexpdata decodes `\\n`
+    back to a newline on parse, so the round trip is lossless.
+    """
+    return (
+        s.replace("\\", "\\\\")
+        .replace('"', '\\"')
+        .replace("\n", "\\n")
+        .replace("\r", "\\r")
+    )
 
 
 def _format_float(x: float) -> str:
