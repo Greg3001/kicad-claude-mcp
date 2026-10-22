@@ -20,7 +20,7 @@ import uuid as _uuid
 from pathlib import Path
 from typing import Any
 
-from kicad_claude.adapters import sch_io, vendor_import
+from kicad_claude.adapters import sch_io, symbol_layout, vendor_import
 from kicad_claude.adapters.sch_io import is_call, sym
 
 logger = logging.getLogger("kicad-claude.adapters.library_create")
@@ -84,13 +84,75 @@ def _build_property_node(
     name: str, value: str, *, x: float = 0, y: float = 0, hide: bool = False
 ) -> list:
     effects: list = [sym("effects"), [sym("font"), [sym("size"), 1.27, 1.27]]]
+    node: list = [sym("property"), name, value, [sym("at"), float(x), float(y), 0]]
     if hide:
-        effects.append([sym("hide"), sym("yes")])
+        # KiCad 10 libraries (version 20251024) carry `hide` on the property
+        # itself; inside `effects` it is read as visible, so the library copy
+        # and the schematic's embedded copy then disagree (lib_symbol_mismatch).
+        node.append([sym("hide"), sym("yes")])
+    node.append(effects)
+    return node
+
+
+def _pin_from_spec(pin: dict, x_mm: float, y_mm: float, angle_deg: int) -> list:
+    return _build_pin_node(
+        number=pin["number"],
+        name=pin.get("name", "~"),
+        x_mm=x_mm,
+        y_mm=y_mm,
+        length_mm=pin.get("length_mm", symbol_layout.PIN_LENGTH_MM),
+        angle_deg=angle_deg,
+        pin_type=pin.get("type", "passive"),
+        pin_shape=pin.get("shape", "line"),
+    )
+
+
+def _body_rect(half_w: float, half_h: float) -> list:
     return [
-        sym("property"), name, value,
-        [sym("at"), float(x), float(y), 0],
-        effects,
+        sym("rectangle"),
+        [sym("start"), -half_w, -half_h],
+        [sym("end"), half_w, half_h],
+        [sym("stroke"), [sym("width"), 0.254], [sym("type"), sym("default")]],
+        [sym("fill"), [sym("type"), sym("background")]],
     ]
+
+
+def _group_by_unit(pins: list[dict]) -> dict[int, list[dict]]:
+    """Group pin specs by their `unit` (default 1); numbers must be unique."""
+    seen: set[str] = set()
+    units: dict[int, list[dict]] = {}
+    for pin in pins:
+        number = str(pin["number"])
+        if number in seen:
+            raise ValueError(f"duplicate pin number {number!r}")
+        seen.add(number)
+        unit = int(pin.get("unit", 1))
+        if unit < 1:
+            raise ValueError(f"pin {number!r}: unit must be >= 1 (got {unit})")
+        units.setdefault(unit, []).append(pin)
+    return dict(sorted(units.items()))
+
+
+def _build_unit(
+    bare_name: str, unit: int, pins: list[dict], body_w: float, body_h: float
+) -> list:
+    """One `(symbol "Name_<unit>_1" ...)` sub-symbol: body rectangle plus pins."""
+    explicit = [symbol_layout.is_explicit(p) for p in pins]
+    if any(explicit) and not all(explicit):
+        raise ValueError(
+            f"unit {unit}: give x_mm/y_mm for every pin or for none (auto layout)"
+        )
+    if all(explicit):
+        rect = _body_rect(body_w / 2, body_h / 2)
+        pin_nodes = [
+            _pin_from_spec(p, p["x_mm"], p["y_mm"], p.get("angle_deg", p.get("angle", 0)))
+            for p in pins
+        ]
+    else:
+        layout = symbol_layout.layout_unit(pins)
+        rect = _body_rect(layout.half_width_mm, layout.half_height_mm)
+        pin_nodes = [_pin_from_spec(pp.spec, pp.x_mm, pp.y_mm, pp.angle_deg) for pp in layout.pins]
+    return [sym("symbol"), f"{bare_name}_{unit}_1", rect, *pin_nodes]
 
 
 def build_symbol_node(
@@ -106,44 +168,23 @@ def build_symbol_node(
     description: str = "",
     keywords: str = "",
 ) -> list:
-    """Build a complete (symbol "Lib:Name" ...) tree.
+    """Build a complete (symbol "Lib:Name" ...) tree, one sub-symbol per unit.
 
-    Body is a centered rectangle of body_width × body_height. Pins live in
-    a sub-symbol (KiCAD's standard layout for graphics + pins).
+    A pin's optional `unit` (default 1) assigns it to a unit. Pins with
+    `x_mm`/`y_mm` are placed as given inside a body_width × body_height
+    rectangle; pins without are auto-laid-out on the left/right of a body
+    sized to fit (see `symbol_layout`). A unit uses one mode or the other.
     """
-    half_w = body_width_mm / 2
-    half_h = body_height_mm / 2
-
     # In a .kicad_sym source file the top-level (symbol "...") is the BARE
     # name (e.g. "S32K358"), not "Lib:S32K358". The qualifier is only used
     # when the symbol is copied into a schematic's lib_symbols block. Mixing
     # them up makes the indexer construct lib_ids like "haps_vendor:haps_vendor:S32K358"
     # since it prepends the lib filename's stem.
     bare_name = qualified_lib_id.split(":", 1)[-1] if ":" in qualified_lib_id else qualified_lib_id
-    sub_sym_name = bare_name + "_0_1"
-
-    body_rect = [
-        sym("rectangle"),
-        [sym("start"), -half_w, -half_h],
-        [sym("end"), half_w, half_h],
-        [sym("stroke"), [sym("width"), 0.254], [sym("type"), sym("default")]],
-        [sym("fill"), [sym("type"), sym("background")]],
+    sub_symbols = [
+        _build_unit(bare_name, unit, unit_pins, body_width_mm, body_height_mm)
+        for unit, unit_pins in _group_by_unit(pins).items()
     ]
-
-    pin_nodes: list[list] = []
-    for pin in pins:
-        pin_nodes.append(_build_pin_node(
-            number=pin["number"],
-            name=pin.get("name", "~"),
-            x_mm=pin["x_mm"],
-            y_mm=pin["y_mm"],
-            length_mm=pin.get("length_mm", 2.54),
-            angle_deg=pin.get("angle_deg", pin.get("angle", 0)),
-            pin_type=pin.get("type", "passive"),
-            pin_shape=pin.get("shape", "line"),
-        ))
-
-    sub_symbol = [sym("symbol"), sub_sym_name, body_rect, *pin_nodes]
 
     symbol: list[Any] = [
         sym("symbol"), bare_name,
@@ -155,20 +196,22 @@ def build_symbol_node(
         _build_property_node("Reference", reference_prefix),
         _build_property_node("Value", value or qualified_lib_id.split(":", 1)[-1]),
         _build_property_node("Footprint", footprint, hide=True),
-        _build_property_node("Datasheet", datasheet, hide=True),
+        # KiCad 10 stores "no datasheet" as an empty string; a literal "~" in a
+        # library makes ERC report lib_symbol_mismatch against the embedded copy.
+        _build_property_node("Datasheet", "" if datasheet == "~" else datasheet, hide=True),
         _build_property_node("Description", description, hide=True),
     ]
     if keywords:
         symbol.append(_build_property_node("ki_keywords", keywords, hide=True))
-    symbol.append(sub_symbol)
+    symbol.extend(sub_symbols)
     return symbol
 
 
-def append_symbol_to_lib(lib_path: Path, symbol_node: list) -> None:
+def append_symbol_to_lib(lib_path: Path, symbol_node: list, replace: bool = False) -> None:
     """Append a built symbol node to a .kicad_sym lib (creating the lib if needed).
 
-    Refuses to add if a symbol with the same qualified name already exists
-    (the caller should remove it first).
+    Refuses to add if a symbol with the same name already exists, unless
+    `replace` is set (iterating on a large generated symbol needs that).
     """
     bare = symbol_node[1] if len(symbol_node) >= 2 else None
     lib_path = Path(lib_path)
@@ -186,16 +229,16 @@ def append_symbol_to_lib(lib_path: Path, symbol_node: list) -> None:
             [sym("generator_version"), "0.1"],
         ]
 
-    for child in tree[1:]:
-        if (
-            is_call(child, "symbol")
-            and len(child) >= 2
-            and child[1] == bare
-        ):
-            raise FileExistsError(
-                f"symbol {bare!r} already exists in {lib_path}; "
-                "remove it manually or import via a different name."
-            )
+    clash = [
+        c for c in tree[1:]
+        if is_call(c, "symbol") and len(c) >= 2 and c[1] == bare
+    ]
+    if clash and not replace:
+        raise FileExistsError(
+            f"symbol {bare!r} already exists in {lib_path}; "
+            "pass replace=True or import via a different name."
+        )
+    tree[:] = [c for c in tree if not any(c is x for x in clash)]
     tree.append(symbol_node)
     sch_io.write_file(lib_path, tree)
 
@@ -214,6 +257,7 @@ def create_symbol(
     datasheet: str = "~",
     description: str = "",
     keywords: str = "",
+    replace: bool = False,
 ) -> dict:
     """Top-level: write the symbol into <project>/lib/<lib_name>.kicad_sym
     and register the lib in sym-lib-table.
@@ -231,13 +275,14 @@ def create_symbol(
         value=value, footprint=footprint, datasheet=datasheet,
         description=description, keywords=keywords,
     )
-    append_symbol_to_lib(lib_path, node)
+    append_symbol_to_lib(lib_path, node, replace=replace)
     table_path = vendor_import.update_sym_lib_table(project_dir, lib_name)
     return {
         "lib_id": qualified,
         "lib_path": str(lib_path),
         "sym_lib_table": str(table_path),
         "pin_count": len(pins),
+        "units": sorted({int(p.get("unit", 1)) for p in pins}),
     }
 
 

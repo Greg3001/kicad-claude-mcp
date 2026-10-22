@@ -33,20 +33,34 @@ def register(mcp) -> None:
         datasheet: str = "~",
         description: str = "",
         keywords: str = "",
+        replace: bool = False,
     ) -> dict:
         """Create a new schematic symbol in `<project>/lib/<lib_name>.kicad_sym`.
 
         Each pin is a dict with:
-          - `number` (str, e.g. "1")
+          - `number` (str, e.g. "1"; unique across the whole symbol)
           - `name` (str, e.g. "VCC")
-          - `x_mm`, `y_mm` (pin's electrical end position, in symbol-local coords)
-          - `length_mm` (default 2.54)
-          - `angle_deg` (0/90/180/270 — direction the pin POINTS away from the body)
           - `type` (input/output/passive/power_in/power_out/bidirectional/...)
           - `shape` (default "line")
+          - `unit` (int >= 1, default 1): which unit of a multi-unit symbol
+            the pin belongs to. Use it to split a 480-pin connector into
+            several readable units, one `add_symbol(..., unit=N)` each.
+          - `side` ("left" | "right", optional): used by auto layout.
+          - `x_mm`, `y_mm` (optional): the pin's connection point in
+            symbol-local coords, Y up. Give them for EVERY pin of a unit or
+            for NONE. With none, the pins are stacked automatically on the
+            left/right of a body sized to fit the names (pitch 2.54 mm).
+          - `length_mm` (default 2.54)
+          - `angle_deg` (explicit layout only): direction from the pin's
+            connection point INTO the body, as KiCad stores it - 0 for a pin
+            on the left edge, 180 on the right, 270 on the top, 90 on the bottom.
 
-        After running, call `index_libraries(force=True)` to make this
-        symbol searchable via `search_symbol`.
+        `body_width_mm` / `body_height_mm` size the body of explicit-layout
+        units; auto-layout units size themselves. `replace=True` overwrites an
+        existing symbol of the same name.
+
+        The symbol is placeable right away with `add_symbol` (project
+        libraries are picked up automatically); `index_libraries` is not needed.
         """
         proj = state.get_active()
         if not pins:
@@ -58,7 +72,7 @@ def register(mcp) -> None:
             body_width_mm=body_width_mm, body_height_mm=body_height_mm,
             reference_prefix=reference_prefix,
             value=value, footprint=footprint, datasheet=datasheet,
-            description=description, keywords=keywords,
+            description=description, keywords=keywords, replace=replace,
         )
 
     @mcp.tool()
