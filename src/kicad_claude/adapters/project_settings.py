@@ -155,6 +155,40 @@ DEFAULT_NETCLASS = {
 }
 
 
+# KiCad ignores `netclass_patterns` when net_settings.meta.version is below 4
+# (it treats the block as the legacy format), so every net stays "Default".
+NET_SETTINGS_VERSION = 4
+
+
+def ensure_current_net_settings(pro: dict) -> dict:
+    """Bring net_settings to the layout KiCad 9/10 honours; keeps existing classes.
+
+    Sets meta.version to 4 and makes sure a "Default" class exists (first in
+    the list, as KiCad writes it). Idempotent.
+    """
+    settings = pro.setdefault("net_settings", {})
+    meta = settings.get("meta") or {}
+    if int(meta.get("version", 0)) < NET_SETTINGS_VERSION:
+        settings["meta"] = {**meta, "version": NET_SETTINGS_VERSION}
+    classes = settings.setdefault("classes", [])
+    if not any(c.get("name") == "Default" for c in classes):
+        classes.insert(0, {**DEFAULT_NETCLASS, "name": "Default"})
+    settings.setdefault("netclass_patterns", [])
+    return settings
+
+
+def qualified_patterns(pattern: str) -> list[str]:
+    """Patterns that catch a net whatever sheet it lives on.
+
+    KiCad matches against the full net name: `/CLK_P` for a local label in the
+    root, `/som/CLK_P` in a sub-sheet, bare `CLK_P` for a global label or power
+    net. An unqualified pattern gets the `*/` twin so one assignment covers all.
+    """
+    if pattern.startswith(("*", "/")):
+        return [pattern]
+    return [pattern, f"*/{pattern}"]
+
+
 def get_net_classes(pro: dict) -> list:
     return pro.setdefault("net_settings", {}).setdefault("classes", [])
 

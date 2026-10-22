@@ -14,6 +14,8 @@ from importlib import resources
 from pathlib import Path
 from string import Template
 
+from kicad_claude.adapters import project_settings
+
 
 def _load_fixture(name: str) -> str:
     """Read a packaged template fixture as text."""
@@ -24,7 +26,7 @@ def _load_fixture(name: str) -> str:
 
 def _blank_pro(name: str) -> dict:
     """Construct a minimal .kicad_pro JSON document for project `name`."""
-    return {
+    pro = {
         "board": {
             "design_settings": {
                 "defaults": {},
@@ -46,13 +48,16 @@ def _blank_pro(name: str) -> dict:
         },
         "net_settings": {
             "classes": [],
-            "meta": {"version": 0},
+            "meta": {"version": 4},
+            "netclass_patterns": [],
         },
         "pcbnew": {"page_layout_descr_file": ""},
         "schematic": {},
         "sheets": [],
         "text_variables": {},
     }
+    project_settings.ensure_current_net_settings(pro)
+    return pro
 
 
 def write_blank_pcb(target_path: Path) -> Path:

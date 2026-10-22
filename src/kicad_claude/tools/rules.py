@@ -115,6 +115,7 @@ def register(mcp) -> None:
         """
         proj = state.get_active()
         pro = ps.load_pro(proj.pro_path)
+        ps.ensure_current_net_settings(pro)
         cls = ps.add_or_update_net_class(
             pro, name,
             track_width_mm=track_width_mm,
@@ -156,6 +157,7 @@ def register(mcp) -> None:
         """
         proj = state.get_active()
         pro = ps.load_pro(proj.pro_path)
+        ps.ensure_current_net_settings(pro)
         cls = ps.add_or_update_net_class(
             pro, name,
             track_width_mm=track_width_mm,
@@ -192,13 +194,20 @@ def register(mcp) -> None:
         """Match nets to a class by pattern (KiCAD glob, e.g. '+5V', 'GND', 'USB_*').
 
         The class must exist (use `add_net_class` first). Idempotent on
-        (pattern, class) pairs.
+        (pattern, class) pairs. KiCad matches the FULL net name, which carries
+        the sheet path (`/CLK_P`, `/som/CLK_P`); a pattern that does not start
+        with `*` or `/` is therefore stored twice, as given and as `*/<pattern>`,
+        so it catches global nets and local ones on any sheet.
         """
         proj = state.get_active()
         pro = ps.load_pro(proj.pro_path)
-        entry = ps.assign_pattern(pro, netclass=class_name, pattern=net_pattern)
+        ps.ensure_current_net_settings(pro)
+        entries = [
+            ps.assign_pattern(pro, netclass=class_name, pattern=p)
+            for p in ps.qualified_patterns(net_pattern)
+        ]
         ps.save_pro(proj.pro_path, pro)
-        return {"assignment": entry}
+        return {"assignment": entries[0], "assignments": entries}
 
     # ----- Custom DRC rules (.kicad_dru) -------------------------------- #
 

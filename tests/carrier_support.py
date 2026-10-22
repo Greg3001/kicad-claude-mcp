@@ -19,9 +19,9 @@ KICAD_CLI = find_kicad_cli()
 needs_kicad = pytest.mark.skipif(KICAD_CLI is None, reason="kicad-cli not installed")
 
 
-def call(server, name: str, **kwargs):
-    """Invoke a registered MCP tool function directly."""
-    return server._tool_manager.get_tool(name).fn(**kwargs)
+def call(server, _tool: str, **kwargs):
+    """Invoke a registered MCP tool function directly (`name=` stays free for tools)."""
+    return server._tool_manager.get_tool(_tool).fn(**kwargs)
 
 
 def _run_cli(*args: str) -> subprocess.CompletedProcess:

@@ -261,7 +261,9 @@ def test_add_and_assign_net_class(tmp_path: Path, monkeypatch):
     listed = _call(mcp, "list_net_classes")
     power = next(c for c in listed["classes"] if c["name"] == "Power")
     assert power["track_width"] == 0.5
-    assert sorted(power["patterns"]) == ["+5V", "GND"]
+    # Each unqualified pattern is also stored with a "*/" twin so it matches local
+    # labels on any sheet ("/CLK_P", "/som/CLK_P"), which KiCad names with the path.
+    assert sorted(power["patterns"]) == ["*/+5V", "*/GND", "+5V", "GND"]
     state.clear_active()
 
 
