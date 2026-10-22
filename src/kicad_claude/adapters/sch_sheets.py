@@ -81,3 +81,79 @@ def page_size_mm(tree: list) -> tuple[float, float]:
         return float(paper[2]), float(paper[3])
     name = paper[1] if paper and len(paper) >= 2 else "A4"
     return PAPER_SIZES_MM.get(name, PAPER_SIZES_MM["A4"])
+
+
+# --------------------------------------------------------------------------- #
+# Sheet pins (the parent-side twin of a child's hierarchical labels)
+# --------------------------------------------------------------------------- #
+
+SHEET_PIN_PITCH_MM = 2.54  # one pin per grid pair so labels don't touch
+_RIGHT_EDGE_SHAPES = frozenset({"output"})  # KiCad convention: outputs leave on the right
+
+
+def child_interface(child_tree: list) -> list[tuple[str, str]]:
+    """(name, shape) of every hierarchical label in a child sheet, first wins."""
+    seen: dict[str, str] = {}
+    for node in child_tree[1:]:
+        if head_of(node) == "hierarchical_label":
+            shape = find_child(node, "shape")
+            seen.setdefault(node[1], str(shape[1]) if shape else "bidirectional")
+    return list(seen.items())
+
+
+def _pins_of(sheet_node: list) -> list[list]:
+    return [c for c in sheet_node[1:] if head_of(c) == "pin"]
+
+
+def sheet_pin_positions(sheet_node: list, page_h: float) -> list[dict]:
+    """Existing sheet pins as {name, shape, position_mm (MCP), orientation}."""
+    out = []
+    for pin in _pins_of(sheet_node):
+        at = find_child(pin, "at")
+        out.append({
+            "name": pin[1],
+            "shape": str(pin[2]),
+            "position_mm": [round(float(at[1]), 4), round(page_h - float(at[2]), 4)],
+            "angle": int(at[3]),
+        })
+    return out
+
+
+def _edge_for(shape: str) -> str:
+    return "right" if shape in _RIGHT_EDGE_SHAPES else "left"
+
+
+def sync_sheet_pins(sheet_node: list, interface: list[tuple[str, str]], page_h: float) -> dict:
+    """Add a sheet pin for every child label that has none; grow the sheet to fit.
+
+    Inputs/bidirectional/passive go on the left edge, outputs on the right,
+    stacked at 2.54 mm. Existing pins are kept as they are; pins whose label
+    vanished from the child are reported as `stale`, not deleted.
+    """
+    from kicad_claude.adapters import sch_editor as ed  # local: avoid a module cycle
+
+    have = {p[1] for p in _pins_of(sheet_node)}
+    at, size = find_child(sheet_node, "at"), find_child(sheet_node, "size")
+    left, top = float(at[1]), float(at[2])
+    width = float(size[1])
+    counts = {"left": sum(1 for p in _pins_of(sheet_node) if int(find_child(p, "at")[3]) == 180),
+              "right": sum(1 for p in _pins_of(sheet_node) if int(find_child(p, "at")[3]) == 0)}
+    added = []
+    for name, shape in interface:
+        if name in have:
+            continue
+        edge = _edge_for(shape)
+        counts[edge] += 1
+        y_k = round(top + SHEET_PIN_PITCH_MM * counts[edge], 4)
+        x_k = left if edge == "left" else round(left + width, 4)
+        ed.add_sheet_pin(
+            sheet_node, pin_name=name, shape=shape, x_mm=x_k, y_mm=page_h - y_k,
+            page_h=page_h, orientation="left" if edge == "left" else "right",
+        )
+        added.append(name)
+    rows = max(counts.values(), default=0)
+    needed = SHEET_PIN_PITCH_MM * (rows + 1)
+    if needed > float(size[2]):
+        size[2] = needed
+    labels = {n for n, _ in interface}
+    return {"added": added, "stale": sorted(have - labels), "height_mm": float(size[2])}

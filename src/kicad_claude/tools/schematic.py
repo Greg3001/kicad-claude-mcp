@@ -765,6 +765,65 @@ def register(mcp) -> None:
         }
 
     @mcp.tool()
+    def sync_sheet_pins(sheet_name: str) -> dict:
+        """Create the sheet pins for a child sheet from its hierarchical labels.
+
+        Reads the child's `hierarchical_label`s and adds a matching pin on the
+        sheet block in the ROOT for each one that has none (inputs, bidirectional
+        and passive on the left edge, outputs on the right; the block grows to
+        fit). Returns every pin with its MCP position so the root can be wired,
+        and lists `stale` pins whose label no longer exists in the child.
+        """
+        proj = state.get_active()
+        root = sch_io.parse_file(proj.sch_path)
+        node = ed.find_sheet_by_name(root, sheet_name)
+        if node is None:
+            raise KeyError(f"no sheet named {sheet_name!r}")
+        child = sch_io.parse_file(proj.path / (ed.get_sheet_filename(node) or ""))
+        page_h = ed.page_height_mm(root)
+        report = sch_sheets.sync_sheet_pins(node, sch_sheets.child_interface(child), page_h)
+        backup = _save_with_backup(root, proj.sch_path)
+        return {
+            "sheet": sheet_name,
+            **report,
+            "pins": sch_sheets.sheet_pin_positions(node, page_h),
+            "backup": str(backup) if backup else None,
+        }
+
+    @mcp.tool()
+    def label_sheet_pins(
+        sheet_name: str,
+        scope: str = "global",
+        stub_mm: float = 5.08,
+    ) -> dict:
+        """Put a stub wire and a net label on every pin of a sheet block (ROOT).
+
+        The label carries the pin's name. Use `scope="global"` (default) so the
+        same name joins the nets of other sheets, or `local` to keep it on the
+        root. Run `sync_sheet_pins` first.
+        """
+        if scope not in ("local", "global"):
+            raise ValueError("scope must be 'local' or 'global'")
+        proj = state.get_active()
+        root = sch_io.parse_file(proj.sch_path)
+        node = ed.find_sheet_by_name(root, sheet_name)
+        if node is None:
+            raise KeyError(f"no sheet named {sheet_name!r}")
+        pins = sch_sheets.sheet_pin_positions(node, ed.page_height_mm(root))
+        if not pins:
+            raise ValueError(f"sheet {sheet_name!r} has no pins; run sync_sheet_pins first")
+        plan = [
+            sch_connect.PlannedPin(
+                p["name"], p["position_mm"][0], p["position_mm"][1],
+                p["angle"] % 360, p["name"], scope, p["shape"],
+            )
+            for p in pins
+        ]
+        counts = sch_connect.apply_plan(root, plan, stub_mm)
+        backup = _save_with_backup(root, proj.sch_path)
+        return {"sheet": sheet_name, **counts, "backup": str(backup) if backup else None}
+
+    @mcp.tool()
     def add_sheet_pin(
         sheet_name: str,
         pin_name: str,
