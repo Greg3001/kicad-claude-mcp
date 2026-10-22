@@ -212,11 +212,18 @@ def add_or_update_net_class(
     diff_pair_gap_mm: float | None = None,
     description: str = "",
 ) -> dict:
-    """Add a new net class or update an existing one. Returns the class dict."""
+    """Add a net class or update one. Returns the class dict.
+
+    A new class holds only the fields given (None = omitted = inherits from
+    Default).
+    """
     classes = get_net_classes(pro)
     existing = find_net_class(pro, name)
     if existing is None:
-        cls: dict = {**DEFAULT_NETCLASS, "name": name}
+        # Only what the caller specifies: an omitted field inherits from the
+        # Default class in KiCad, so a "definition only" class makes no geometry
+        # decision.
+        cls: dict = {"name": name}
         if description:
             cls["description"] = description
         classes.append(cls)

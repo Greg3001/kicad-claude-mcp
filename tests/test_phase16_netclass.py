@@ -91,6 +91,30 @@ def test_kicad_applies_local_and_global_net_classes(mcp, rules_mcp, blank_projec
     _run_cli("sch", "export", "netlist", "--format", "kicadxml", "-o", str(out),
              str(blank_project["sch"]))
     import re
-    classes = dict(re.findall(r'<net code="\d+" name="([^"]+)" class="([^"]+)"', out.read_text()))
+    # a class that leaves fields unset is reported as "<class>,Default" (inherits)
+    classes = {
+        n: c.split(",")[0]
+        for n, c in re.findall(r'<net code="\d+" name="([^"]+)" class="([^"]+)"', out.read_text())
+    }
     assert classes == {"/CLK_P": "DIFF90", "DDR_DQ0": "SE50",
                        "CLK_N": "DIFF90", "/OTHER": "Default"}
+
+
+def test_definition_only_class_makes_no_geometry_decision():
+    pro = {}
+    cls = ps.add_or_update_net_class(pro, "SE50", description="50 ohm single-ended")
+    assert cls == {"name": "SE50", "description": "50 ohm single-ended"}
+
+
+def test_class_holds_only_the_fields_given():
+    pro = {}
+    cls = ps.add_or_update_net_class(pro, "DIFF90", diff_pair_width_mm=0.1, diff_pair_gap_mm=0.15)
+    assert cls == {"name": "DIFF90", "diff_pair_width": 0.1, "diff_pair_gap": 0.15}
+    ps.add_or_update_net_class(pro, "DIFF90", track_width_mm=0.1)
+    assert ps.find_net_class(pro, "DIFF90")["diff_pair_width"] == 0.1  # untouched
+
+
+def test_default_class_still_carries_full_geometry():
+    pro: dict = {}
+    ps.ensure_current_net_settings(pro)
+    assert ps.find_net_class(pro, "Default")["track_width"] == 0.25

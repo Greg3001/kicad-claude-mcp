@@ -22,10 +22,29 @@ from kicad_claude.adapters.sch_io import find_child, find_children, head_of, is_
 _MAX_EXTENDS_DEPTH = 8  # real libraries chain 1-2 deep; guards against cycles
 
 
+_LIB_CACHE_MAX = 16  # stock libs are ~1 MB each; a design touches a handful
+_lib_cache: dict[str, tuple[tuple[int, int], list]] = {}
+
+
 def _read_lib(lib_path: Path) -> list:
-    data = sexpdata.loads(Path(lib_path).read_text(encoding="utf-8", errors="replace"))
+    """Parsed `.kicad_sym`, cached per process and invalidated by mtime/size.
+
+    Parsing Device.kicad_sym costs ~1 s; a 270-part sheet set called it per
+    placement and took minutes. Callers must not mutate the result
+    (`_resolve` deep-copies what it returns).
+    """
+    path = Path(lib_path)
+    stat = path.stat()
+    stamp = (stat.st_mtime_ns, stat.st_size)
+    hit = _lib_cache.get(str(path))
+    if hit is not None and hit[0] == stamp:
+        return hit[1]
+    data = sexpdata.loads(path.read_text(encoding="utf-8", errors="replace"))
     if not is_call(data, "kicad_symbol_lib"):
         raise ValueError(f"not a kicad_symbol_lib: {lib_path}")
+    if len(_lib_cache) >= _LIB_CACHE_MAX:
+        _lib_cache.pop(next(iter(_lib_cache)))
+    _lib_cache[str(path)] = (stamp, data)
     return data
 
 

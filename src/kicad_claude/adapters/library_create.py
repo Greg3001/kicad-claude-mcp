@@ -84,7 +84,10 @@ def _build_property_node(
     name: str, value: str, *, x: float = 0, y: float = 0, hide: bool = False
 ) -> list:
     effects: list = [sym("effects"), [sym("font"), [sym("size"), 1.27, 1.27]]]
-    node: list = [sym("property"), name, value, [sym("at"), float(x), float(y), 0]]
+    node: list = [
+        sym("property"), name, value, [sym("at"), float(x), float(y), 0],
+        [sym("show_name"), sym("no")], [sym("do_not_autoplace"), sym("no")],
+    ]
     if hide:
         # KiCad 10 libraries (version 20251024) carry `hide` on the property
         # itself; inside `effects` it is read as visible, so the library copy
@@ -193,6 +196,8 @@ def build_symbol_node(
         [sym("exclude_from_sim"), sym("no")],
         [sym("in_bom"), sym("yes")],
         [sym("on_board"), sym("yes")],
+        [sym("in_pos_files"), sym("yes")],
+        [sym("duplicate_pin_numbers_are_jumpers"), sym("no")],
         _build_property_node("Reference", reference_prefix),
         _build_property_node("Value", value or qualified_lib_id.split(":", 1)[-1]),
         _build_property_node("Footprint", footprint, hide=True),

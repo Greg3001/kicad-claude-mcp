@@ -12,6 +12,7 @@ helper does the conversion at the boundary.
 from __future__ import annotations
 
 import math
+import re
 import shutil
 import uuid
 from datetime import datetime
@@ -319,6 +320,24 @@ def build_symbol_instance(
 # --------------------------------------------------------------------------- #
 
 
+_REFERENCE_RE = re.compile(r"^[A-Za-z_#]+[0-9]+$")
+
+
+def _check_reference_format(reference: str) -> None:
+    """Reject references KiCad cannot annotate: letters then digits, or `?`-suffixed.
+
+    `U_LATCH` loads and passes ERC, but `kicad-cli sch export netlist` then
+    reports annotation errors for the part; `U_LATCH1` is fine.
+    """
+    if reference.endswith("?") or _REFERENCE_RE.match(reference):
+        return
+    raise ValueError(
+        f"reference {reference!r} has no trailing number, so KiCad reports an "
+        f"annotation error on netlist export; use e.g. {reference.rstrip('0123456789')}1 "
+        f"or {reference.rstrip('0123456789')}? to annotate later"
+    )
+
+
 def _check_unit_placement(
     tree: list, reference: str, qualified_lib_id: str, unit: int, units: list[int]
 ) -> list[list]:
@@ -372,6 +391,7 @@ def add_symbol(
     instance lists only that unit's pins (plus any shared unit-0 pins), and
     later units inherit the fields of the first one placed.
     """
+    _check_reference_format(reference)
     lib_entry_def = make_lib_symbol_entry(sym_def_node, qualified_lib_id)
     siblings = _check_unit_placement(
         tree, reference, qualified_lib_id, unit, symbol_lib.unit_numbers(lib_entry_def)

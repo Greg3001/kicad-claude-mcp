@@ -278,3 +278,57 @@ def test_newline_is_escaped_not_written_raw():
 def test_multiline_string_round_trips():
     node = [sch_io.sym("text"), 'line1\nline2 "q" \\ end']
     assert sch_io.parse_file_text(sch_io.dumps(node)) == node
+
+
+# ===== batch 2: format version, library cache, reference format ============== #
+
+
+def test_blank_sheets_carry_the_kicad10_format_version(blank_project, tmp_path):
+    from kicad_claude.templates.blank import write_blank_schematic
+
+    child = write_blank_schematic(tmp_path / "c.kicad_sch")
+    for path in (blank_project["sch"], child):
+        assert sch_io.find_child(sch_io.parse_file(path), "version")[1] >= 20260306
+
+
+def test_library_is_parsed_once_and_reparsed_when_it_changes(tmp_path, monkeypatch):
+    lib = tmp_path / "L.kicad_sym"
+    lib.write_text(MINI_LIB.read_text())
+    calls = []
+    real = symbol_lib.sexpdata.loads
+    monkeypatch.setattr(symbol_lib.sexpdata, "loads", lambda t: calls.append(1) or real(t))
+    symbol_lib._lib_cache.clear()
+    symbol_lib.load_symbol_def(lib, "Resistor")
+    symbol_lib.load_symbol_def(lib, "R_Small")
+    assert len(calls) == 1
+    lib.write_text(MINI_LIB.read_text() + "\n")  # size changes -> stale entry dropped
+    symbol_lib.load_symbol_def(lib, "Resistor")
+    assert len(calls) == 2
+
+
+def test_cached_library_is_not_corrupted_by_callers(tmp_path):
+    lib = tmp_path / "L.kicad_sym"
+    lib.write_text(MINI_LIB.read_text())
+    first = symbol_lib.load_symbol_def(lib, "Resistor")
+    first[1] = "MUTATED"
+    assert symbol_lib.load_symbol_def(lib, "Resistor")[1] == "Resistor"
+
+
+@pytest.mark.parametrize("ref", ["U_LATCH", "TP_VCC", "R", "1U"])
+def test_reference_without_trailing_number_is_refused(mcp, ref):
+    with pytest.raises(ValueError, match="no trailing number"):
+        call(mcp, "add_symbol", lib_id="MiniLib:Resistor", reference=ref, value="1k",
+             x_mm=101.6, y_mm=101.6)
+
+
+@pytest.mark.parametrize("ref", ["R1", "U_LATCH1", "TP_VCC2", "#PWR0001", "R?"])
+def test_annotatable_references_are_accepted(mcp, ref):
+    call(mcp, "add_symbol", lib_id="MiniLib:Resistor", reference=ref, value="1k",
+         x_mm=101.6, y_mm=101.6)
+
+
+def test_cli_errors_drop_fontconfig_noise():
+    from kicad_claude.adapters import kicad_cli
+
+    noise = "\n".join(f'Fontconfig warning: "x", line {i}: bad' for i in range(40))
+    assert kicad_cli._clean_stderr(noise + "\nError loading schematic") == "Error loading schematic"

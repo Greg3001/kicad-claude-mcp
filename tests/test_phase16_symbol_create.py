@@ -173,3 +173,40 @@ def test_generated_symbol_matches_library_copy_in_kicad(mcp, blank_project):
     call(mcp, "create_symbol", lib_name="som", symbol_name="K", pins=pins_for("A", 4))
     call(mcp, "add_symbol", lib_id="som:K", reference="J1", value="K", x_mm=76.2, y_mm=101.6)
     assert erc_counts(blank_project["sch"])["lib_symbol_mismatch"] == 0
+
+
+# ===== KiCad 10 library format =============================================== #
+
+
+def test_generated_symbol_uses_kicad10_flags():
+    node = build(pins_for("A", 2))
+    assert sch_io.find_child(node, "in_pos_files")[1] == sch_io.sym("yes")
+    assert sch_io.find_child(node, "duplicate_pin_numbers_are_jumpers")[1] == sch_io.sym("no")
+    footprint = [p for p in sch_io.find_children(node, "property") if p[1] == "Footprint"][0]
+    assert sch_io.find_child(footprint, "hide") is not None  # on the property, not in effects
+    assert sch_io.find_child(sch_io.find_child(footprint, "effects"), "hide") is None
+    assert sch_io.find_child(footprint, "show_name") is not None
+
+
+@needs_kicad
+def test_lib_survives_kicad_upgrade_unchanged_in_meaning(mcp, blank_project):
+    """A hand-written old-style library (effects-level hide, "~" datasheet) must not
+    trip lib_symbol_mismatch now that new sheets carry KiCad 10's format version."""
+    lib = blank_project["sch"].parent / "lib" / "old.kicad_sym"
+    lib.parent.mkdir(exist_ok=True)
+    lib.write_text("""(kicad_symbol_lib (version 20251024) (generator "x")
+(symbol "OLD"
+  (property "Reference" "U" (at 0 0 0) (effects (font (size 1.27 1.27))))
+  (property "Value" "OLD" (at 0 0 0) (effects (font (size 1.27 1.27))))
+  (property "Footprint" "" (at 0 0 0) (effects (font (size 1.27 1.27)) (hide yes)))
+  (property "Datasheet" "~" (at 0 0 0) (effects (font (size 1.27 1.27)) (hide yes)))
+  (property "Description" "" (at 0 0 0) (effects (font (size 1.27 1.27)) (hide yes)))
+  (symbol "OLD_1_1"
+    (pin passive line (at -7.62 0 0) (length 2.54)
+      (name "A" (effects (font (size 1.27 1.27)))) (number "1" (effects (font (size 1.27 1.27)))))
+  )))""")
+    from kicad_claude.adapters import vendor_import
+
+    vendor_import.update_sym_lib_table(blank_project["sch"].parent, "old")
+    call(mcp, "add_symbol", lib_id="old:OLD", reference="U1", value="OLD", x_mm=101.6, y_mm=101.6)
+    assert erc_counts(blank_project["sch"])["lib_symbol_mismatch"] == 0

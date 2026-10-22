@@ -33,6 +33,12 @@ def _ensure_cli() -> Path:
     return cli
 
 
+def _clean_stderr(text: str, keep: int = 300) -> str:
+    """Last `keep` chars of stderr without Fontconfig warnings (dozens on macOS)."""
+    lines = [ln for ln in text.splitlines() if "Fontconfig" not in ln and ln.strip()]
+    return "\n".join(lines)[-keep:]
+
+
 def _run(args: list[str], *, timeout: float = 120.0, cwd: Path | None = None) -> tuple[str, str]:
     """Invoke `kicad-cli` with `args`. Returns (stdout, stderr) on success."""
     cli = _ensure_cli()
@@ -47,7 +53,7 @@ def _run(args: list[str], *, timeout: float = 120.0, cwd: Path | None = None) ->
     if r.returncode != 0:
         raise KicadCliError(
             f"kicad-cli {' '.join(args[:3])} failed (rc={r.returncode}). "
-            f"stderr: {r.stderr[-300:]}"
+            f"stderr: {_clean_stderr(r.stderr)}"
         )
     return r.stdout, r.stderr
 
@@ -129,7 +135,7 @@ def run_erc(
     if r.returncode != 0 or not output_json.is_file():
         raise KicadCliError(
             f"kicad-cli sch erc failed (rc={r.returncode}). "
-            f"stderr: {r.stderr[-300:]}"
+            f"stderr: {_clean_stderr(r.stderr)}"
         )
 
     data = json.loads(output_json.read_text())
@@ -219,7 +225,7 @@ def run_drc(
     if r.returncode != 0 or not output_json.is_file():
         raise KicadCliError(
             f"kicad-cli pcb drc failed (rc={r.returncode}). "
-            f"stderr: {r.stderr[-300:]}"
+            f"stderr: {_clean_stderr(r.stderr)}"
         )
 
     data = json.loads(output_json.read_text())
