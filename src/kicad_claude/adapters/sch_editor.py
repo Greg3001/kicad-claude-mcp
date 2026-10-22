@@ -678,6 +678,7 @@ def add_sheet_node(
     top_left_kicad = (bl_k[0], bl_k[1] - height_mm)
     root_uuid = _schematic_uuid(parent_tree)
     sheet_uuid = str(uuid.uuid4())
+    page_no = len(find_children(parent_tree, "sheet")) + 2  # the root is page 1
 
     def _prop(name: str, value: str, dy: float, hide: bool) -> list:
         node: list = [
@@ -708,7 +709,7 @@ def add_sheet_node(
             [
                 sym("project"),
                 project_name,
-                [sym("path"), f"/{root_uuid}", [sym("page"), "2"]],
+                [sym("path"), f"/{root_uuid}", [sym("page"), str(page_no)]],
             ],
         ],
     ]

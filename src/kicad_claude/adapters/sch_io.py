@@ -19,10 +19,14 @@ import sexpdata
 # --------------------------------------------------------------------------- #
 
 
+def parse_file_text(text: str) -> list:
+    """Parse KiCAD s-expression text. Returns the top-level list."""
+    return sexpdata.loads(text)
+
+
 def parse_file(path: Path) -> list:
     """Parse a KiCAD s-expression file. Returns the top-level list."""
-    text = Path(path).read_text(encoding="utf-8", errors="replace")
-    return sexpdata.loads(text)
+    return parse_file_text(Path(path).read_text(encoding="utf-8", errors="replace"))
 
 
 # --------------------------------------------------------------------------- #

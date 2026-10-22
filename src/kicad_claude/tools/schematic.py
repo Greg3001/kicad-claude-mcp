@@ -21,7 +21,7 @@ from pathlib import Path
 from kicad_claude import state
 from kicad_claude.adapters import annotation
 from kicad_claude.adapters import sch_editor as ed
-from kicad_claude.adapters import sch_io, symbol_lib
+from kicad_claude.adapters import sch_io, sch_sheets, symbol_lib
 from kicad_claude.templates.blank import write_blank_schematic
 from kicad_claude.tools import library as lib_tools
 
@@ -200,6 +200,27 @@ def register(mcp) -> None:
             "unit": unit,
             "units_in_symbol": symbol_lib.unit_numbers(sym_def),
             "pin_count": meta.get("pin_count", 0),
+            "sheet": state.get_active_sheet_filename() or "root",
+            "backup": str(backup) if backup else None,
+        }
+
+    @mcp.tool()
+    def set_sheet_paper(paper: str = "A3") -> dict:
+        """Set the paper size of the ACTIVE sheet (A5..A0, USLetter, USLegal, USLedger).
+
+        Call it on a fresh sheet, before placing anything: it refuses a sheet
+        that already has content, because the Y-up coordinates are flipped
+        around the page height and a later change would move every item. A
+        4-unit, 480-pin SOM connector needs at least A3; the default A4
+        silently clips pins that fall off the page.
+        """
+        tree, path = _load_active_schematic()
+        sch_sheets.set_paper(tree, paper)
+        backup = _save_with_backup(tree, path)
+        width, height = sch_sheets.page_size_mm(tree)
+        return {
+            "paper": paper,
+            "size_mm": [width, height],
             "sheet": state.get_active_sheet_filename() or "root",
             "backup": str(backup) if backup else None,
         }
@@ -471,6 +492,7 @@ def register(mcp) -> None:
         y_mm: float = 50,
         width_mm: float = 30,
         height_mm: float = 20,
+        paper: str = "A4",
     ) -> dict:
         """Create a child sub-sheet on the ROOT schematic.
 
@@ -479,7 +501,7 @@ def register(mcp) -> None:
         call `set_active_sheet` to switch into the new child.
 
         If `sheet_filename` is omitted, it defaults to a slugified
-        `{sheet_name}.kicad_sch`.
+        `{sheet_name}.kicad_sch`. `paper` sets the child's paper size.
         """
         proj = state.get_active()
         if sheet_filename is None:
@@ -503,9 +525,10 @@ def register(mcp) -> None:
                 height_mm=height_mm,
                 project_name=proj.name,
             )
-            backup = _save_with_backup(tree, root_path)
+            # Child first: a failure here must not leave a dangling sheet in the root.
             child_path = proj.path / sheet_filename
-            write_blank_schematic(child_path)
+            write_blank_schematic(child_path, paper=paper)
+            backup = _save_with_backup(tree, root_path)
         finally:
             if previous_sheet is not None:
                 state.set_active_sheet(previous_sheet)
