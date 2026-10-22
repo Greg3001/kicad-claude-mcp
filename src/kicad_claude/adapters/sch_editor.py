@@ -72,6 +72,8 @@ def page_height_mm(tree: list) -> float:
 def _paper_height_mm(tree: list) -> float:
     """Detect the schematic paper height. Defaults to A4 landscape (210mm)."""
     paper = find_child(tree, "paper")
+    if paper and len(paper) >= 4 and paper[1] == "User":
+        return float(paper[3])  # (paper "User" width height)
     if paper and len(paper) >= 2 and isinstance(paper[1], str):
         # KiCAD paper sizes (height in mm, landscape orientation by default):
         sizes = {

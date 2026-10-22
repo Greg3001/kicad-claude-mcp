@@ -36,10 +36,30 @@ def has_content(tree: list) -> bool:
     return any(head_of(c) in _CONTENT_HEADS for c in tree[1:])
 
 
-def set_paper(tree: list, size: str) -> str:
-    """Set the sheet's paper size; refuses if the sheet already has content."""
-    if size not in PAPER_SIZES_MM:
-        raise ValueError(f"paper must be one of {list(PAPER_SIZES_MM)} (got {size!r})")
+def _user_paper(width_mm: float | None, height_mm: float | None) -> tuple[float, float]:
+    if width_mm is None or height_mm is None:
+        raise ValueError("paper 'User' needs width_mm and height_mm")
+    if not (50 <= width_mm <= 3000 and 50 <= height_mm <= 3000):
+        raise ValueError("User paper sides must be between 50 and 3000 mm")
+    return float(width_mm), float(height_mm)
+
+
+def set_paper(
+    tree: list,
+    size: str,
+    width_mm: float | None = None,
+    height_mm: float | None = None,
+) -> str:
+    """Set the sheet's paper size; refuses if the sheet already has content.
+
+    `size` is a named paper, or "User" with explicit `width_mm` / `height_mm`
+    (KiCad stores `(paper "User" w h)`).
+    """
+    if size != "User" and size not in PAPER_SIZES_MM:
+        raise ValueError(f"paper must be one of {[*PAPER_SIZES_MM, 'User']} (got {size!r})")
+    node = [sym("paper"), size]
+    if size == "User":
+        node += list(_user_paper(width_mm, height_mm))
     if has_content(tree):
         raise ValueError(
             "sheet already has content: changing paper would shift it against "
@@ -48,14 +68,16 @@ def set_paper(tree: list, size: str) -> str:
     paper = find_child(tree, "paper")
     if paper is None:
         idx = next((i + 1 for i, c in enumerate(tree) if head_of(c) == "uuid"), 1)
-        tree.insert(idx, [sym("paper"), size])
+        tree.insert(idx, node)
     else:
-        paper[:] = [sym("paper"), size]
+        paper[:] = node
     return size
 
 
 def page_size_mm(tree: list) -> tuple[float, float]:
     """(width, height) of the sheet in mm; A4 when no paper is declared."""
     paper = find_child(tree, "paper")
+    if paper and len(paper) >= 4 and paper[1] == "User":
+        return float(paper[2]), float(paper[3])
     name = paper[1] if paper and len(paper) >= 2 else "A4"
     return PAPER_SIZES_MM.get(name, PAPER_SIZES_MM["A4"])

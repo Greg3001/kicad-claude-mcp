@@ -21,7 +21,8 @@ from pathlib import Path
 from kicad_claude import state
 from kicad_claude.adapters import annotation
 from kicad_claude.adapters import sch_editor as ed
-from kicad_claude.adapters import sch_connect, sch_io, sch_sheets, symbol_lib
+from kicad_claude.adapters import sch_connect, sch_io, sch_items, sch_sheets, symbol_lib
+from kicad_claude.utils import geometry
 from kicad_claude.templates.blank import write_blank_schematic
 from kicad_claude.tools import library as lib_tools
 
@@ -149,6 +150,8 @@ def register(mcp) -> None:
         y_mm: float,
         rotation: float = 0,
         unit: int = 1,
+        footprint: str | None = None,
+        fields: dict[str, str] | None = None,
     ) -> dict:
         """Add a symbol from the indexed KiCAD libraries to the active schematic.
 
@@ -161,8 +164,13 @@ def register(mcp) -> None:
             unit: which unit of a multi-unit part to place. Call again with
                 the same `reference` and the next `unit` to place the others
                 (they inherit the first unit's fields; `value` is then ignored).
+            footprint: overrides the library's default footprint ("Lib:Name").
+            fields: extra fields set at place time, e.g.
+                {"MPN": "XCK26-SFVC784", "Manufacturer": "AMD", "Rad Grade": "COTS"}
+                (hidden; use set_symbol_field with visible=True to show one).
 
-        Returns the placed symbol's identity. Refuses if `reference` already
+        Returns the placed symbol's identity, plus `warnings` when pins or the
+        origin are off the 1.27 mm grid. Refuses if `reference` already
         exists (except for a different unit of the same part).
         """
         tree, path = _load_active_schematic()
@@ -181,11 +189,18 @@ def register(mcp) -> None:
             sym_def_node=sym_def,
             project_name=proj.name,
             instance_path=_instance_path(),
-            footprint=meta.get("default_footprint", ""),
+            footprint=footprint if footprint is not None else meta.get("default_footprint", ""),
             datasheet=meta.get("datasheet", "~"),
             description=meta.get("description", ""),
             unit=unit,
         )
+        for placed in ed.find_symbols_by_reference(tree, reference):  # every unit
+            for name, field_value in (fields or {}).items():
+                ed.set_symbol_field(placed, name, str(field_value))
+        pin_points = [
+            tuple(p["position_mm"]) for p in ed.list_pins_for_symbol(tree, reference, unit)
+        ]
+        warnings = geometry.grid_warning([(x_mm, y_mm), *pin_points], "points of this symbol")
         backup = _save_with_backup(tree, path)
         logger.info(
             "added %s (%s) on sheet=%s at (%s, %s)",
@@ -201,12 +216,19 @@ def register(mcp) -> None:
             "units_in_symbol": symbol_lib.unit_numbers(sym_def),
             "pin_count": meta.get("pin_count", 0),
             "sheet": state.get_active_sheet_filename() or "root",
+            "warnings": warnings,
             "backup": str(backup) if backup else None,
         }
 
     @mcp.tool()
-    def set_sheet_paper(paper: str = "A3") -> dict:
-        """Set the paper size of the ACTIVE sheet (A5..A0, USLetter, USLegal, USLedger).
+    def set_sheet_paper(
+        paper: str = "A3",
+        width_mm: float | None = None,
+        height_mm: float | None = None,
+    ) -> dict:
+        """Set the paper size of the ACTIVE sheet (A5..A0, USLetter, USLegal, USLedger, User).
+
+        `paper="User"` takes a custom `width_mm` x `height_mm` (landscape).
 
         Call it on a fresh sheet, before placing anything: it refuses a sheet
         that already has content, because the Y-up coordinates are flipped
@@ -215,7 +237,7 @@ def register(mcp) -> None:
         silently clips pins that fall off the page.
         """
         tree, path = _load_active_schematic()
-        sch_sheets.set_paper(tree, paper)
+        sch_sheets.set_paper(tree, paper, width_mm, height_mm)
         backup = _save_with_backup(tree, path)
         width, height = sch_sheets.page_size_mm(tree)
         return {
@@ -312,6 +334,7 @@ def register(mcp) -> None:
         return {
             "from_mm": [x1_mm, y1_mm],
             "to_mm": [x2_mm, y2_mm],
+            "warnings": geometry.grid_warning([(x1_mm, y1_mm), (x2_mm, y2_mm)], "wire ends"),
             "backup": str(backup) if backup else None,
         }
 
@@ -329,6 +352,7 @@ def register(mcp) -> None:
         return {
             "net": net_name,
             "position_mm": [x_mm, y_mm],
+            "warnings": geometry.grid_warning([(x_mm, y_mm)], "label anchors"),
             "orientation": orientation,
             "backup": str(backup) if backup else None,
         }
@@ -466,6 +490,46 @@ def register(mcp) -> None:
         }
 
     @mcp.tool()
+    def add_text_note(text: str, x_mm: float, y_mm: float, size_mm: float = 1.27) -> dict:
+        """Add a free text note (newlines allowed) to the active sheet."""
+        tree, path = _load_active_schematic()
+        sch_items.add_text(tree, text, x_mm, y_mm, size_mm)
+        backup = _save_with_backup(tree, path)
+        return {"position_mm": [x_mm, y_mm], "chars": len(text),
+                "backup": str(backup) if backup else None}
+
+    @mcp.tool()
+    def set_dnp(reference: str, dnp: bool = True) -> dict:
+        """Mark a part Do-Not-Populate (all its units); `export_bom(exclude_dnp=True)` drops it."""
+        tree, path = _load_active_schematic()
+        units = sch_items.set_dnp(tree, reference, dnp)
+        backup = _save_with_backup(tree, path)
+        return {"reference": reference, "dnp": dnp, "units": units,
+                "backup": str(backup) if backup else None}
+
+    @mcp.tool()
+    def add_items(items: list[dict]) -> dict:
+        """Draw many items on the active sheet in ONE file write.
+
+        Each item is a dict with `op` and its coordinates (MCP mm, Y up):
+          wire {x1,y1,x2,y2} | junction {x,y} | no_connect {x,y} |
+          label {net,x,y,orientation?} | global_label {net,x,y,shape?,orientation?} |
+          hierarchical_label {net,x,y,shape?,orientation?} | text {text,x,y,size?}
+        Validated as a whole: one bad item and nothing is written. Max 5000 items.
+        Prefer `connect_pins` for pin-to-net wiring; use this for the rest
+        (buses of wires, power rails, notes).
+        """
+        tree, path = _load_active_schematic()
+        counts = sch_items.apply_items(tree, items)
+        points = [
+            (op[a], op[b]) for op in items for a, b in (("x", "y"), ("x1", "y1"), ("x2", "y2"))
+            if a in op and b in op
+        ]
+        backup = _save_with_backup(tree, path)
+        return {"applied": counts, "warnings": geometry.grid_warning(points, "item points"),
+                "backup": str(backup) if backup else None}
+
+    @mcp.tool()
     def list_pins(reference: str, unit: int | None = None) -> list[dict]:
         """List pins of a placed symbol with their absolute positions (MCP coords).
 
@@ -562,6 +626,8 @@ def register(mcp) -> None:
         width_mm: float = 30,
         height_mm: float = 20,
         paper: str = "A4",
+        paper_width_mm: float | None = None,
+        paper_height_mm: float | None = None,
     ) -> dict:
         """Create a child sub-sheet on the ROOT schematic.
 
@@ -570,7 +636,8 @@ def register(mcp) -> None:
         call `set_active_sheet` to switch into the new child.
 
         If `sheet_filename` is omitted, it defaults to a slugified
-        `{sheet_name}.kicad_sch`. `paper` sets the child's paper size.
+        `{sheet_name}.kicad_sch`. `paper` sets the child's paper size
+        ("User" with paper_width_mm / paper_height_mm for a custom one).
         """
         proj = state.get_active()
         if sheet_filename is None:
@@ -596,7 +663,7 @@ def register(mcp) -> None:
             )
             # Child first: a failure here must not leave a dangling sheet in the root.
             child_path = proj.path / sheet_filename
-            write_blank_schematic(child_path, paper=paper)
+            write_blank_schematic(child_path, paper, paper_width_mm, paper_height_mm)
             backup = _save_with_backup(tree, root_path)
         finally:
             if previous_sheet is not None:

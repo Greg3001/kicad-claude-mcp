@@ -72,3 +72,23 @@ def rotate_xy(x: float, y: float, deg: float) -> tuple[float, float]:
 def round_mm(value: float, digits: int = 4) -> float:
     """KiCAD uses 6-decimal precision internally; 4 is plenty for placements."""
     return round(float(value), digits)
+
+
+def off_grid(points: list[tuple[float, float]], grid_mm: float = SCH_GRID_MM) -> list[tuple[float, float]]:
+    """The points whose x or y is not a multiple of the connection grid."""
+    def on(v: float) -> bool:
+        return math.isclose(v / grid_mm, round(v / grid_mm), abs_tol=1e-3)
+
+    return [p for p in points if not (on(p[0]) and on(p[1]))]
+
+
+def grid_warning(points: list[tuple[float, float]], what: str) -> list[str]:
+    """A one-element warning list when any point is off the 1.27 mm grid, else []."""
+    bad = off_grid(points)
+    if not bad:
+        return []
+    return [
+        f"{len(bad)} of {len(points)} {what} are off KiCad's 1.27 mm connection grid "
+        f"(first: {bad[0]}); ERC will report endpoint_off_grid and wires will not "
+        f"connect. Use multiples of 1.27 (symbol origins on 2.54 if pins sit on 1.27 offsets)."
+    ]
