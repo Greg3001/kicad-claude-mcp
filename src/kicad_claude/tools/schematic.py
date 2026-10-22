@@ -133,6 +133,55 @@ def _next_power_reference(refs: list[str], prefix: str = "#PWR") -> str:
     return f"{prefix}{n:04d}"
 
 
+def place_power_symbol(
+    net: str, x_mm: float, y_mm: float, rotation: float = 0, style: str | None = None
+) -> dict:
+    """Place a power symbol on the active sheet (shared by the tools that need one)."""
+    idx = lib_tools._ensure_index()
+    candidate = f"power:{net}"
+    if candidate not in idx["symbols"]:
+        candidate = f"power:{style or '+3V3'}"
+        if candidate not in idx["symbols"]:
+            available = sorted(
+                k.split(":", 1)[1] for k in idx["symbols"] if k.startswith("power:")
+            )
+            raise KeyError(
+                f"no power symbol {candidate!r} to draw {net!r} with; "
+                f"available styles: {available[:20]}{'...' if len(available) > 20 else ''}"
+            )
+    tree, path = _load_active_schematic()
+    ref = _next_power_reference(
+        _project_references(), "#FLG" if net == "PWR_FLAG" else "#PWR"
+    )
+    lib_path, sym_name, meta = _resolve_lib_symbol(candidate)
+    sym_def = ed.fetch_symbol_def(lib_path, sym_name)
+    proj = state.get_active()
+    ed.add_symbol(
+        tree,
+        qualified_lib_id=candidate,
+        reference=ref,
+        value=net,
+        x_mm=x_mm,
+        y_mm=y_mm,
+        rotation=rotation,
+        sym_def_node=sym_def,
+        project_name=proj.name,
+        instance_path=_instance_path(),
+        footprint=meta.get("default_footprint", ""),
+        datasheet=meta.get("datasheet", "~"),
+        description=meta.get("description", ""),
+    )
+    backup = _save_with_backup(tree, path)
+    return {
+        "net": net,
+        "reference": ref,
+        "lib_id": candidate,
+        "position_mm": [x_mm, y_mm],
+        "warnings": geometry.grid_warning([(x_mm, y_mm)], "power symbol origins"),
+        "backup": str(backup) if backup else None,
+    }
+
+
 # --------------------------------------------------------------------------- #
 # Tool registration
 # --------------------------------------------------------------------------- #
@@ -379,49 +428,7 @@ def register(mcp) -> None:
                 does not exist. Default `+3V3` (arrow up); use `GND` for a
                 ground-type rail.
         """
-        idx = lib_tools._ensure_index()
-        candidate = f"power:{net}"
-        if candidate not in idx["symbols"]:
-            candidate = f"power:{style or '+3V3'}"
-            if candidate not in idx["symbols"]:
-                available = sorted(
-                    k.split(":", 1)[1] for k in idx["symbols"] if k.startswith("power:")
-                )
-                raise KeyError(
-                    f"no power symbol {candidate!r} to draw {net!r} with; "
-                    f"available styles: {available[:20]}{'...' if len(available) > 20 else ''}"
-                )
-        tree, path = _load_active_schematic()
-        ref = _next_power_reference(
-            _project_references(), "#FLG" if net == "PWR_FLAG" else "#PWR"
-        )
-        lib_path, sym_name, meta = _resolve_lib_symbol(candidate)
-        sym_def = ed.fetch_symbol_def(lib_path, sym_name)
-        proj = state.get_active()
-        ed.add_symbol(
-            tree,
-            qualified_lib_id=candidate,
-            reference=ref,
-            value=net,
-            x_mm=x_mm,
-            y_mm=y_mm,
-            rotation=rotation,
-            sym_def_node=sym_def,
-            project_name=proj.name,
-            instance_path=_instance_path(),
-            footprint=meta.get("default_footprint", ""),
-            datasheet=meta.get("datasheet", "~"),
-            description=meta.get("description", ""),
-        )
-        backup = _save_with_backup(tree, path)
-        return {
-            "net": net,
-            "reference": ref,
-            "lib_id": candidate,
-            "position_mm": [x_mm, y_mm],
-            "warnings": geometry.grid_warning([(x_mm, y_mm)], "power symbol origins"),
-            "backup": str(backup) if backup else None,
-        }
+        return place_power_symbol(net, x_mm, y_mm, rotation, style)
 
     @mcp.tool()
     def add_no_connect(reference: str, pin: str, unit: int | None = None) -> dict:

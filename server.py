@@ -47,6 +47,7 @@ from kicad_claude.tools.library_create import register as register_library_creat
 from kicad_claude.tools.manufacturing import register as register_manufacturing_tools  # noqa: E402
 from kicad_claude.tools.panelization import register as register_panelization_tools  # noqa: E402
 from kicad_claude.tools.pcb import register as register_pcb_tools  # noqa: E402
+from kicad_claude.tools.power_flags import register as register_power_flag_tools  # noqa: E402
 from kicad_claude.tools.project import register as register_project_tools  # noqa: E402
 from kicad_claude.tools.rf import register as register_rf_tools  # noqa: E402
 from kicad_claude.tools.routing import register as register_routing_tools  # noqa: E402
@@ -84,6 +85,7 @@ register_manufacturing_tools(mcp)
 register_rules_tools(mcp)
 register_sync_tools(mcp)
 register_library_create_tools(mcp)
+register_power_flag_tools(mcp)
 register_signal_integrity_tools(mcp)
 register_thermal_tools(mcp)
 register_rf_tools(mcp)
