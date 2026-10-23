@@ -3,14 +3,19 @@
 from __future__ import annotations
 
 import json
+import shutil
+import subprocess
 
 import pytest
 from mcp.server.fastmcp import FastMCP
 
+from kicad_claude.adapters import kicad_python
 from kicad_claude.adapters import project_settings as ps
+from kicad_claude.adapters import vendor_import
 from kicad_claude.tools import rules as rules_tools
+from kicad_claude.tools import sync as sync_tools
 
-from .carrier_support import _run_cli, call, needs_kicad
+from .carrier_support import FIXTURES, _run_cli, call, needs_kicad
 
 
 def test_ensure_current_net_settings_upgrades_legacy_block():
@@ -118,3 +123,36 @@ def test_default_class_still_carries_full_geometry():
     pro: dict = {}
     ps.ensure_current_net_settings(pro)
     assert ps.find_net_class(pro, "Default")["track_width"] == 0.25
+
+
+# ===== sub-sheet nets: the board is right even where the schematic netlist is not ===== #
+
+
+@needs_kicad
+def test_board_assigns_net_classes_to_subsheet_nets(mcp, rules_mcp, blank_project):
+    """kicad-cli's *schematic* netlist reports class Default for nets that live only on a
+    sub-sheet (KiCad 10.0.1), but pcbnew resolves them from the same patterns correctly.
+    The board is what matters for routing, so pin that."""
+    sync_tools.register(mcp)
+    call(rules_mcp, "add_net_class", name="A", track_width_mm=0.1)
+    call(rules_mcp, "assign_net_class", net_pattern="CLK_*", class_name="A")
+    call(mcp, "add_sheet", sheet_name="som", sheet_filename="som.kicad_sch")
+    for sheet, ref, net in (("root", "R1", "CLK_R"), ("som", "R2", "CLK_N")):
+        call(mcp, "set_active_sheet", sheet=sheet)
+        call(mcp, "add_symbol", lib_id="MiniLib:Resistor", reference=ref, value="1k",
+             x_mm=101.6, y_mm=101.6, footprint="OldFP:OldPad")
+        call(mcp, "connect_pins", reference=ref, connections=[
+            {"pin": "1", "net": net}, {"pin": "2", "net": f"OTHER_{ref}"}])
+    call(mcp, "set_active_sheet", sheet="root")
+    proj = blank_project["sch"].parent
+    shutil.copytree(FIXTURES / "OldFP.pretty", proj / "lib" / "OldFP.pretty")
+    vendor_import.update_fp_lib_table(proj, "OldFP")
+    call(mcp, "place_footprints_from_schematic")
+    call(mcp, "update_pcb_from_schematic")
+    script = ("import pcbnew,sys\nb=pcbnew.LoadBoard(sys.argv[1])\n"
+              "for n,ni in b.GetNetsByName().items():\n    print('NET|'+str(n)+'|'+ni.GetNetClassName())\n")
+    out = subprocess.run([str(kicad_python.find_kicad_python()), "-c", script,
+                          str(proj / "demo.kicad_pcb")], capture_output=True, text=True).stdout
+    classes = dict(line.split("|")[1:] for line in out.splitlines() if line.startswith("NET|"))
+    assert classes["/CLK_R"].startswith("A") and classes["/som/CLK_N"].startswith("A")
+    assert classes["/som/OTHER_R2"] == "Default"

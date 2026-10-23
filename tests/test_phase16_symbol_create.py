@@ -210,3 +210,39 @@ def test_lib_survives_kicad_upgrade_unchanged_in_meaning(mcp, blank_project):
     vendor_import.update_sym_lib_table(blank_project["sch"].parent, "old")
     call(mcp, "add_symbol", lib_id="old:OLD", reference="U1", value="OLD", x_mm=101.6, y_mm=101.6)
     assert erc_counts(blank_project["sch"])["lib_symbol_mismatch"] == 0
+
+
+# ===== every KiCad electrical pin type ======================================= #
+
+ALL_PIN_TYPES = ["input", "output", "bidirectional", "tri_state", "passive", "free", "unspecified",
+                 "power_in", "power_out", "open_collector", "open_emitter", "no_connect"]
+
+
+def test_supported_pin_types_are_exactly_kicads():
+    assert set(lc.PIN_TYPES) == set(ALL_PIN_TYPES)
+
+
+@needs_kicad
+def test_kicad_loads_a_symbol_using_every_pin_type(mcp, blank_project):
+    pins = [{"number": str(i + 1), "name": t.upper(), "type": t} for i, t in enumerate(ALL_PIN_TYPES)]
+    call(mcp, "create_symbol", lib_name="t", symbol_name="ALLTYPES", pins=pins)
+    call(mcp, "add_symbol", lib_id="t:ALLTYPES", reference="U1", value="X", x_mm=101.6, y_mm=101.6)
+    nets = netlist_pins(blank_project["sch"])
+    assert sum(len(n) for n in nets.values()) == len(ALL_PIN_TYPES)
+    assert erc_counts(blank_project["sch"])["lib_symbol_mismatch"] == 0
+
+
+@needs_kicad
+def test_tri_state_outputs_may_share_a_net_but_plain_outputs_may_not(mcp, blank_project):
+    for kind in ("tri_state", "output"):
+        for ref, x in (("U1", 76.2), ("U2", 127.0)):
+            name = f"{kind}_{ref}"
+            call(mcp, "create_symbol", lib_name="t", symbol_name=name,
+                 pins=[{"number": "1", "name": "SO", "type": kind}])
+            call(mcp, "add_symbol", lib_id=f"t:{name}", reference=f"{kind[0].upper()}{ref}", value="X",
+                 x_mm=x, y_mm=101.6 if kind == "tri_state" else 152.4)
+    for ref in ("TU1", "TU2", "OU1", "OU2"):
+        call(mcp, "connect_pins", reference=ref, scope="global",
+             connections=[{"pin": "1", "net": "MISO" if ref[0] == "T" else "MISO_PLAIN"}])
+    counts = erc_counts(blank_project["sch"])
+    assert counts["pin_to_pin"] == 1  # only the plain-output net conflicts

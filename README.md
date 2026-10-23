@@ -5,7 +5,7 @@
 > schematic capture, library management, PCB layout, autorouting, manufacturing
 > outputs, signal-integrity calculations, RF design, and more.
 
-**119 MCP tools · 437 tests passing · 16 phases · headless from idea to gerbers**
+**119 MCP tools · 441 tests passing · 16 phases · headless from idea to gerbers**
 
 The server edits `.kicad_sch` / `.kicad_pcb` / `.kicad_pro` files directly.
 You drive it via Claude Code; you open KiCAD only to review the result.
@@ -260,7 +260,7 @@ diverged from the original spec.
 - **Freerouting needs Java 21+.** Freerouting 2.2.x requires Java 25; we ship 2.1.0 because it works on Java 21–24.
 - **Closed-form analyses are estimators.** Impedance / current / crosstalk / thermal / return-path tools give ballpark numbers good for early design. Production hardware needs Ansys / Sonnet / Saturn PCB / Icepak for sign-off.
 - **Page size.** The default A4 sheet silently loses pins that fall off the page (ERC ignores them). Call `set_sheet_paper` on an empty sheet first; it refuses a sheet that already has content because the Y flip depends on the page height.
-- **Net names carry the sheet path.** A local label on the root is `/NAME`, on sub-sheet `som` it is `/som/NAME`; only global labels and power symbols are bare. Use `add_global_label` / `connect_pins(scope="global")` for nets that cross sheets. `assign_net_class` stores both `NAME` and `*/NAME`; nets that live only on a sub-sheet showed class `Default` in kicad-cli's netlist even with matching patterns (KiCad 10.0.1), so give nets that need a class a global label.
+- **Net names carry the sheet path.** A local label on the root is `/NAME`, on sub-sheet `som` it is `/som/NAME`; only global labels and power symbols are bare. Use `add_global_label` / `connect_pins(scope="global")` for nets that cross sheets. `assign_net_class` stores both `NAME` and `*/NAME`; the board is right for nets on any sheet (`pcbnew` resolves `/som/CLK_N` from the same patterns), but `kicad-cli sch export netlist` reports class `Default` for nets that live only on a sub-sheet (KiCad 10.0.1), so check classes on the board, not in that netlist.
 - **ERC is not a pin census.** KiCad 10.0.1's ERC skips a few percent of floating pins in a dense symbol, at positions that depend on where the symbol sits. Count pins with a netlist export when it matters.
 
 ---
