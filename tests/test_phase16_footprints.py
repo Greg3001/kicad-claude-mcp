@@ -163,3 +163,52 @@ def test_rectangular_qfn_tool_output_loads_in_kicad(mcp, blank_project):
                ep_width_mm=2.2, ep_height_mm=4.6)
     assert res["pad_count"] == 31
     assert kicad_cli.validate_footprint(Path(res["kicad_mod_path"])) is True
+
+
+# ===== replace =============================================================== #
+
+PAD = {"number": "1", "type": "smd", "shape": "rect", "x_mm": 0, "y_mm": 0, "size_x_mm": 1, "size_y_mm": 1}
+
+
+def pad_count(path: Path) -> int:
+    return len(sch_io.find_children(sch_io.parse_file(path), "pad"))
+
+
+def test_existing_footprint_is_refused_without_replace(tmp_path):
+    lc.create_footprint(tmp_path, lib_name="x", footprint_name="F", pads=[PAD], validate=False)
+    with pytest.raises(FileExistsError, match="replace=True"):
+        lc.create_footprint(tmp_path, lib_name="x", footprint_name="F", pads=[PAD], validate=False)
+
+
+def test_replace_overwrites_and_keeps_one_lib_table_entry(tmp_path):
+    lc.create_footprint(tmp_path, lib_name="x", footprint_name="F", pads=[PAD], validate=False)
+    res = lc.create_footprint(tmp_path, lib_name="x", footprint_name="F",
+                              pads=[PAD, {**PAD, "number": "2", "x_mm": 2}], validate=False, replace=True)
+    assert pad_count(Path(res["kicad_mod_path"])) == 2
+    assert (tmp_path / "fp-lib-table").read_text().count('(name "x")') == 1
+
+
+def test_rejected_replacement_restores_the_old_footprint(tmp_path, monkeypatch):
+    res = lc.create_footprint(tmp_path, lib_name="x", footprint_name="F", pads=[PAD], validate=False)
+    monkeypatch.setattr(kicad_cli, "validate_footprint", lambda path: False)
+    with pytest.raises(ValueError, match="rejected"):
+        lc.create_footprint(tmp_path, lib_name="x", footprint_name="F",
+                            pads=[PAD, {**PAD, "number": "2"}], replace=True)
+    assert pad_count(Path(res["kicad_mod_path"])) == 1
+
+
+def test_generator_tools_accept_replace(mcp, blank_project):
+    args = dict(lib_name="ti", footprint_name="SO8", pin_count=8, pitch_mm=1.27, row_span_mm=5.4,
+                pad_length_mm=1.6, pad_width_mm=0.6)
+    call(mcp, "create_footprint_dual", **args)
+    with pytest.raises(FileExistsError):
+        call(mcp, "create_footprint_dual", **args)
+    res = call(mcp, "create_footprint_dual", **{**args, "pin_count": 4}, replace=True)
+    assert res["pad_count"] == 4
+
+
+def test_tri_state_is_a_valid_pin_type_for_shared_buses():
+    node = lc.build_symbol_node(qualified_lib_id="l:FRAM", pins=[
+        {"number": "1", "name": "SO", "type": "tri_state"}])
+    pin = sch_io.find_child(sch_io.find_child(node, "symbol"), "pin")
+    assert pin[1] == sch_io.sym("tri_state")

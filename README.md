@@ -5,7 +5,7 @@
 > schematic capture, library management, PCB layout, autorouting, manufacturing
 > outputs, signal-integrity calculations, RF design, and more.
 
-**119 MCP tools · 432 tests passing · 16 phases · headless from idea to gerbers**
+**119 MCP tools · 437 tests passing · 16 phases · headless from idea to gerbers**
 
 The server edits `.kicad_sch` / `.kicad_pcb` / `.kicad_pro` files directly.
 You drive it via Claude Code; you open KiCAD only to review the result.

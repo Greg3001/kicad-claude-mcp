@@ -489,20 +489,23 @@ def create_footprint(
     add_courtyard: bool = True,
     add_silk_outline: bool = True,
     validate: bool = True,
+    replace: bool = False,
 ) -> dict:
     """Top-level: write a footprint to <project>/lib/<lib_name>.pretty/<footprint_name>.kicad_mod.
 
     Auto-courtyard (F.CrtYd) and auto-silk outline (F.SilkS) are inflated
     around the pad bounding box. Disable with add_courtyard=False or
     add_silk_outline=False. The file is checked with `kicad-cli fp upgrade`
-    and removed if KiCad rejects it (`validate=False` skips that).
+    and removed if KiCad rejects it (`validate=False` skips that); with `replace=True`
+    an existing footprint of that name is overwritten, and restored if the new
+    one is rejected.
     """
     project_dir = Path(project_dir)
     pretty_dir = project_dir / "lib" / f"{lib_name}.pretty"
     pretty_dir.mkdir(parents=True, exist_ok=True)
     target = pretty_dir / f"{footprint_name}.kicad_mod"
-    if target.is_file():
-        raise FileExistsError(f"{target} already exists")
+    if target.is_file() and not replace:
+        raise FileExistsError(f"{target} already exists; pass replace=True to overwrite it")
 
     qualified = f"{lib_name}:{footprint_name}"
     node = build_footprint_node(
@@ -511,9 +514,13 @@ def create_footprint(
         add_courtyard=add_courtyard,
         add_silk_outline=add_silk_outline,
     )
+    previous = target.read_bytes() if target.is_file() else None
     sch_io.write_file(target, node)
     if validate and not kicad_cli.validate_footprint(target):
-        target.unlink()
+        if previous is None:
+            target.unlink()
+        else:
+            target.write_bytes(previous)  # a rejected replacement keeps the old footprint
         raise ValueError(f"kicad-cli rejected the generated footprint {qualified!r}; nothing was written")
     table_path = vendor_import.update_fp_lib_table(project_dir, lib_name)
     return {

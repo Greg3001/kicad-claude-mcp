@@ -41,7 +41,11 @@ def register(mcp) -> None:
         Each pin is a dict with:
           - `number` (str, e.g. "1"; unique across the whole symbol)
           - `name` (str, e.g. "VCC")
-          - `type` (input/output/passive/power_in/power_out/bidirectional/...)
+          - `type` (input / output / bidirectional / tri_state / passive /
+            power_in / power_out / open_collector / open_emitter / unspecified /
+            free / no_connect). Use `tri_state` for outputs that share a net
+            (three SPI slaves on one MISO line): two plain `output` pins on one
+            net are an ERC pin_to_pin error.
           - `shape` (default "line")
           - `unit` (int >= 1, default 1): which unit of a multi-unit symbol
             the pin belongs to. Use it to split a 480-pin connector into
@@ -86,6 +90,7 @@ def register(mcp) -> None:
         add_courtyard: bool = True,
         add_silk_outline: bool = True,
         validate: bool = True,
+        replace: bool = False,
     ) -> dict:
         """Create a new PCB footprint in `<project>/lib/<lib_name>.pretty/`.
 
@@ -115,6 +120,7 @@ def register(mcp) -> None:
             add_courtyard=add_courtyard,
             add_silk_outline=add_silk_outline,
             validate=validate,
+            replace=replace,
         )
 
     @mcp.tool()
@@ -131,6 +137,7 @@ def register(mcp) -> None:
         ep_number: str | None = None,
         description: str = "",
         tags: str = "",
+        replace: bool = False,
     ) -> dict:
         """Create a dual-row SMD footprint (SOIC, TSSOP, HTSSOP, PowerPAD...).
 
@@ -140,14 +147,15 @@ def register(mcp) -> None:
         runs across the rows, `pad_width_mm` along them. Give `ep_width_mm` and
         `ep_height_mm` for a centred exposed (thermal) pad, numbered
         `ep_number` (default: the next number after the last pin) - make the
-        symbol's pin number agree.
+        symbol's pin number agree. `replace=True` overwrites an existing
+        footprint of the same name.
         """
         pads = footprint_pads.dual_row_pads(
             pin_count, pitch_mm, row_span_mm, pad_length_mm, pad_width_mm,
             ep_width_mm, ep_height_mm, ep_number)
         return lc.create_footprint(
             state.get_active().path, lib_name=lib_name, footprint_name=footprint_name,
-            pads=pads, description=description, tags=tags)
+            pads=pads, description=description, tags=tags, replace=replace)
 
     @mcp.tool()
     def create_footprint_qfn(
@@ -166,6 +174,7 @@ def register(mcp) -> None:
         end_pad_length_mm: float | None = None,
         description: str = "",
         tags: str = "",
+        replace: bool = False,
     ) -> dict:
         """Create a four-sided SMD footprint (QFN, VQFN, WQFN, LGA), square or rectangular.
 
@@ -178,7 +187,8 @@ def register(mcp) -> None:
         (default `span_mm`). `pad_length_mm` runs away from the body;
         `end_pad_length_mm` overrides it on the ends. Give the exposed-pad size
         for a centred thermal pad, numbered `ep_number` (default: the next
-        number after the last pin - make the symbol agree).
+        number after the last pin - make the symbol agree). `replace=True`
+        overwrites an existing footprint of the same name.
         """
         pads = footprint_pads.qfn_pads(
             pins_per_side, pitch_mm, span_mm, pad_length_mm, pad_width_mm,
@@ -186,4 +196,4 @@ def register(mcp) -> None:
             pins_top_bottom, span_y_mm, end_pad_length_mm)
         return lc.create_footprint(
             state.get_active().path, lib_name=lib_name, footprint_name=footprint_name,
-            pads=pads, description=description, tags=tags)
+            pads=pads, description=description, tags=tags, replace=replace)
